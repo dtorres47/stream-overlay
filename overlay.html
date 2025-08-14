@@ -1,0 +1,147 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Overlay</title>
+    <style>
+        html,body { margin:0; padding:20px; background:#111; color:#0f0; font-family:system-ui,sans-serif; }
+        .toast { background:rgba(0,0,0,.6); color:#fff; padding:10px; border-radius:8px; margin-top:12px; }
+        #quests { margin-top:18px; }
+        .quest { background:rgba(0,0,0,.5); color:#fff; padding:8px 10px; border-radius:10px; margin-top:8px; }
+        #audioGate { position:fixed; top:10px; right:10px; }
+        #wsStatus { position:fixed; bottom:10px; right:10px; background:rgba(0,0,0,.5); color:#fff; padding:6px 10px; border-radius:8px; }
+    </style>
+</head>
+<body>
+<h2>Overlay Connected ✅</h2>
+<button id="audioGate">Enable Sound</button>
+<div id="messages"></div>
+<div id="quests"><h3 style="color:#9f9;">Quest Log</h3></div>
+<div id="wsStatus">WS: idle</div>
+
+<script>
+    const msgs = document.getElementById("messages");
+    const questList = document.getElementById("quests");
+    const audioGateBtn = document.getElementById("audioGate");
+    const wsStatus = document.getElementById("wsStatus");
+    const cooldown = new Map();
+    let audioEnabled = false;
+
+    // ---- audio gate ----
+    function enableAudio() {
+        // poke the audio policy (OBS usually doesn’t need this)
+        const a = new Audio("data:audio/mp3;base64,//uQZAAAAAAAAAAAAAAAAAAAA"); // tiny silent clip
+        a.play().catch(()=>{}).finally(() => {
+            audioEnabled = true;
+            audioGateBtn.style.display = "none";
+        });
+    }
+    audioGateBtn.addEventListener("click", enableAudio);
+
+    // ---- helpers ----
+    function toast(text) {
+        const d = document.createElement("div");
+        d.className = "toast";
+        d.textContent = text;
+        msgs.appendChild(d);
+    }
+
+    function play(url) {
+        const a = new Audio(url);
+        a.volume = 0.7;
+        a.play().catch(()=>{});
+    }
+
+    function beep(ms=200, freq=880){
+        try {
+            const C = new (window.AudioContext||window.webkitAudioContext)();
+            const o = C.createOscillator(), g = C.createGain();
+            o.connect(g); g.connect(C.destination);
+            o.type = "square"; o.frequency.value = freq;
+            g.gain.setValueAtTime(0.2, C.currentTime);
+            o.start(); o.stop(C.currentTime + ms/1000);
+        } catch {}
+    }
+
+    // ---- browser TTS ----
+    function speak(text, voiceHint) {
+        if (!("speechSynthesis" in window)) { toast("TTS not supported"); return; }
+        if (!text) return;
+        const u = new SpeechSynthesisUtterance(text);
+        if (voiceHint) {
+            const voices = speechSynthesis.getVoices();
+            const match = voices.find(v => v.name.toLowerCase().includes(voiceHint.toLowerCase()));
+            if (match) u.voice = match;
+        }
+        u.rate = 1.0; u.pitch = 1.0; u.volume = 1.0;
+        speechSynthesis.speak(u);
+    }
+    // warm voices list on some browsers
+    if ('speechSynthesis' in window) {
+        speechSynthesis.getVoices();
+        if (speechSynthesis.onvoiceschanged !== undefined) {
+            speechSynthesis.onvoiceschanged = () => {};
+        }
+    }
+
+    // ---- WebSocket with auto-reconnect ----
+    const wsUrl = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
+    let ws, retry = 0;
+    function connectWS() {
+        wsStatus.textContent = "WS: connecting";
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            retry = 0;
+            wsStatus.textContent = "WS: connected";
+            toast("WebSocket open → " + wsUrl);
+        };
+
+        ws.onmessage = (event) => {
+            let msg; try { msg = JSON.parse(event.data); } catch { return; }
+            if (!msg || !msg.type) return;
+
+            if (msg.type === "DONATION") {
+                const d = msg.data || {};
+                const cents = Number(d.amount || 0);
+                const dollars = isFinite(cents) ? (cents/100).toFixed(2) : "0.00";
+                toast(`💸 ${d.donor || "Anonymous"} donated $${dollars}${d.msg ? " — " + d.msg : ""}`);
+            }
+
+            if (msg.type === "ABILITY_FIRE") {
+                const d = msg.data || {};
+                const id = d.id || "ability";
+                const until = cooldown.get(id) || 0;
+                const now = Date.now();
+                if (now < until) return;
+                cooldown.set(id, now + 3000);
+                if (d.sfx_url) play(d.sfx_url); else beep();
+            }
+
+            if (msg.type === "QUEST_ADD") {
+                const d = msg.data || {};
+                const el = document.createElement("div");
+                el.className = "quest";
+                el.textContent = `🗡️ ${d.name || "Quest"}`;
+                questList.appendChild(el);
+            }
+
+            if (msg.type === "TTS_PLAY") {
+                const d = msg.data || {};
+                speak(d.text, d.voice);
+            }
+        };
+
+        ws.onclose = () => {
+            wsStatus.textContent = "WS: disconnected";
+            const delay = Math.min(30000, 1000 * Math.pow(2, retry++)); // 1s→2s→4s… max 30s
+            wsStatus.textContent = `WS: reconnecting in ${Math.round(delay/1000)}s`;
+            setTimeout(connectWS, delay);
+        };
+
+        ws.onerror = () => { /* onclose will handle retry */ };
+    }
+    connectWS();
+</script>
+</body>
+</html>
