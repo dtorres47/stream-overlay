@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -19,6 +20,9 @@ import (
 //
 //go:embed overlay.html
 var overlayHTML []byte
+
+//go:embed panel.html
+var panelHTML []byte
 
 // ─── WebSocket plumbing ─────────────────────────────────────────────────────
 var upgrader = websocket.Upgrader{
@@ -60,16 +64,58 @@ func clientsCount() int {
 }
 
 // ─── tiny in-memory catalog (for testing abilities/quests) ──────────────────
-type Ability struct{ ID, Name, SFXURL string }
-type Quest struct{ ID, Name string }
-
-var abilities = map[string]Ability{
-	"goat": {ID: "goat", Name: "Play Goat Noises", SFXURL: "https://interactive-examples.mdn.mozilla.net/media/cc0-audio/t-rex-roar.mp3"},
-	"trex": {ID: "trex", Name: "T-Rex Roar", SFXURL: "https://interactive-examples.mdn.mozilla.net/media/cc0-audio/t-rex-roar.mp3"},
+type Ability struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	PriceCents int64  `json:"price_cents"`
+	SFXURL     string `json:"sfx_url"`
+	IconURL    string `json:"icon_url"`
 }
-var quests = map[string]Quest{
-	"call-maam":     {ID: "call-maam", Name: `Call a man "ma'am"`},
-	"soundboard-5x": {ID: "soundboard-5x", Name: "Make 5 calls with X soundboard"},
+type Quest struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	PriceCents int64  `json:"price_cents"`
+	IconURL    string `json:"icon_url"`
+}
+
+var (
+	abilities = map[string]Ability{}
+	quests    = map[string]Quest{}
+)
+
+type catalogFile struct {
+	Abilities []Ability `json:"abilities"`
+	Quests    []Quest   `json:"quests"`
+}
+
+func loadCatalogFromDisk() {
+	b, err := os.ReadFile("catalog.json")
+	if err != nil {
+		log.Println("catalog.json not found; using built-in defaults")
+		// Minimal defaults if file missing
+		abilities = map[string]Ability{
+			"trex": {ID: "trex", Name: "T-Rex Roar", PriceCents: 300, SFXURL: "https://interactive-examples.mdn.mozilla.net/media/cc0-audio/t-rex-roar.mp3"},
+		}
+		quests = map[string]Quest{
+			"call-maam":     {ID: "call-maam", Name: `Call a man "ma'am"`, PriceCents: 499},
+			"soundboard-5x": {ID: "soundboard-5x", Name: "Make 5 calls with X soundboard", PriceCents: 399},
+		}
+		return
+	}
+	var cf catalogFile
+	if err := json.Unmarshal(b, &cf); err != nil {
+		log.Println("catalog.json parse error:", err)
+		return
+	}
+	abilities = map[string]Ability{}
+	for _, a := range cf.Abilities {
+		abilities[a.ID] = a
+	}
+	quests = map[string]Quest{}
+	for _, q := range cf.Quests {
+		quests[q.ID] = q
+	}
+	log.Printf("catalog loaded: %d abilities, %d quests\n", len(abilities), len(quests))
 }
 
 // ─── main ───────────────────────────────────────────────────────────────────
@@ -77,6 +123,8 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.RedirectSlashes)
+
+	loadCatalogFromDisk()
 
 	// Index with clickable tests
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
@@ -219,6 +267,63 @@ func main() {
 			Data: map[string]any{"text": text, "voice": voice},
 		})
 		_, _ = w.Write([]byte("Sent TTS to overlays"))
+	})
+
+	// Serve the control panel
+	r.Get("/panel", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(panelHTML)
+	})
+
+	// Catalog JSON (abilities + quests)
+	r.Get("/api/catalog", func(w http.ResponseWriter, r *http.Request) {
+		type cat struct {
+			Abilities []Ability `json:"abilities"`
+			Quests    []Quest   `json:"quests"`
+		}
+		abs := make([]Ability, 0, len(abilities))
+		for _, a := range abilities {
+			abs = append(abs, a)
+		}
+		qs := make([]Quest, 0, len(quests))
+		for _, q := range quests {
+			qs = append(qs, q)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(cat{Abilities: abs, Quests: qs})
+	})
+
+	r.Post("/api/catalog/reload", func(w http.ResponseWriter, r *http.Request) {
+		loadCatalogFromDisk()
+		w.Write([]byte("ok"))
+	})
+
+	r.Get("/api/ability/fire", func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get("id")
+		a, ok := abilities[id]
+		if !ok {
+			http.Error(w, "unknown ability id", http.StatusNotFound)
+			return
+		}
+		broadcast(wsMsg{
+			Type: "ABILITY_FIRE",
+			Data: map[string]any{"id": a.ID, "name": a.Name, "sfx_url": a.SFXURL, "price_cents": a.PriceCents},
+		})
+		w.Write([]byte("Sent ability"))
+	})
+
+	r.Get("/api/quest/add", func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get("id")
+		q, ok := quests[id]
+		if !ok {
+			http.Error(w, "unknown quest id", http.StatusNotFound)
+			return
+		}
+		broadcast(wsMsg{
+			Type: "QUEST_ADD",
+			Data: map[string]any{"id": q.ID, "name": q.Name, "icon_url": q.IconURL, "price_cents": q.PriceCents},
+		})
+		w.Write([]byte("Sent quest"))
 	})
 
 	// Debug: count how many overlays are connected

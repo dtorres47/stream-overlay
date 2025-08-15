@@ -1,0 +1,147 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Control Panel</title>
+    <style>
+        :root { color-scheme: dark; }
+        html,body { margin:0; font-family:system-ui, sans-serif; background:#0f1115; color:#e6e6e6; }
+        header { padding:16px 20px; border-bottom:1px solid #202632; display:flex; gap:14px; align-items:center; }
+        main { padding:16px 20px; display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap:16px; }
+        .card { background:#131824; border:1px solid #202632; border-radius:14px; padding:14px; }
+        .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+        label { font-size:12px; color:#aab; }
+        input, select { background:#0e1320; color:#e6e6e6; border:1px solid #2a3242; border-radius:8px; padding:8px 10px; }
+        button { background:#2b6fef; color:white; border:0; border-radius:8px; padding:8px 12px; cursor:pointer; }
+        button.secondary { background:#384255; }
+        h3 { margin:0 0 10px 0; font-size:16px; color:#dfe6ff; }
+        .list { display:flex; flex-direction:column; gap:8px; }
+        .item { display:flex; justify-content:space-between; align-items:center; background:#0f1422; border:1px solid #242c3d; border-radius:10px; padding:10px; }
+        small.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; color:#9ab; }
+    </style>
+</head>
+<body>
+<header>
+    <strong>Control Panel</strong>
+    <a href="/overlay" target="_blank"><button class="secondary">Open Overlay</button></a>
+    <button id="refreshClients" class="secondary">Clients: <span id="clients">0</span></button>
+    <button id="reload" class="secondary">Reload Catalog</button>
+</header>
+
+<main>
+    <section class="card">
+        <h3>Donation Toast</h3>
+        <div class="row">
+            <div>
+                <label>Donor</label><br/>
+                <input id="donor" value="Viewer"/>
+            </div>
+            <div>
+                <label>Amount (USD)</label><br/>
+                <input id="amount" type="number" value="5.99" step="0.01" min="1"/>
+            </div>
+        </div>
+        <div class="row" style="margin-top:8px;">
+            <div style="flex:1;">
+                <label>Message</label><br/>
+                <input id="msg" style="width:100%;" placeholder="Say hi!"/>
+            </div>
+            <button id="sendDonation">Send</button>
+        </div>
+    </section>
+
+    <section class="card">
+        <h3>Text-to-Speech</h3>
+        <div class="row">
+            <div style="flex:1;">
+                <label>Text</label><br/>
+                <input id="ttsText" style="width:100%;" placeholder="Hello, world"/>
+            </div>
+        </div>
+        <div class="row" style="margin-top:8px;">
+            <div>
+                <label>Voice hint (optional)</label><br/>
+                <input id="ttsVoice" placeholder="Google / UK / Zira"/>
+            </div>
+            <button id="sendTTS">Speak</button>
+        </div>
+        <small class="mono">Note: Overlay must be open; click “Enable Sound” there once.</small>
+    </section>
+
+    <section class="card">
+        <h3>Abilities</h3>
+        <div id="abilities" class="list"><div class="item"><em>Loading…</em></div></div>
+    </section>
+
+    <section class="card">
+        <h3>Quests</h3>
+        <div id="quests" class="list"><div class="item"><em>Loading…</em></div></div>
+    </section>
+</main>
+
+<script>
+    const elClients = document.getElementById('clients');
+    async function refreshClients() {
+        const t = await fetch('/api/debug/clients').then(r => r.text()).catch(()=> 'clients: 0');
+        elClients.textContent = (t.match(/\d+/) || ['0'])[0];
+    }
+    document.getElementById('refreshClients').onclick = refreshClients;
+    refreshClients();
+
+    document.getElementById('reload').onclick = async () => {
+        await fetch('/api/catalog/reload', { method: 'POST' });
+        await loadCatalog();
+    };
+
+    // Donation
+    document.getElementById('sendDonation').onclick = async () => {
+        const donor = document.getElementById('donor').value || 'Viewer';
+        const amountD = parseFloat(document.getElementById('amount').value || '0');
+        const cents = Math.max(0, Math.round(amountD * 100));
+        const msg = encodeURIComponent(document.getElementById('msg').value || '');
+        await fetch(`/api/donation?donor=${encodeURIComponent(donor)}&amount_cents=${cents}&msg=${msg}`);
+        refreshClients();
+    };
+
+    // TTS
+    document.getElementById('sendTTS').onclick = async () => {
+        const text = encodeURIComponent(document.getElementById('ttsText').value || '');
+        if (!text) return;
+        const voice = encodeURIComponent(document.getElementById('ttsVoice').value || '');
+        await fetch(`/api/test/tts?text=${text}&voice=${voice}`);
+        refreshClients();
+    };
+
+    // Load catalog (abilities & quests)
+    async function loadCatalog() {
+        const data = await fetch('/api/catalog').then(r => r.json());
+        const abil = document.getElementById('abilities');
+        const ques = document.getElementById('quests');
+        abil.innerHTML = ''; ques.innerHTML = '';
+
+        data.abilities.forEach(a => {
+            const d = document.createElement('div');
+            d.className = 'item';
+            d.innerHTML = `<div><strong>${a.name}</strong><br/><small class="mono">${a.id}</small></div>`;
+            const b = document.createElement('button');
+            b.textContent = 'Fire';
+            b.onclick = () => fetch(`/api/ability/fire?id=${encodeURIComponent(a.id)}`);
+            d.appendChild(b);
+            abil.appendChild(d);
+        });
+
+        data.quests.forEach(q => {
+            const d = document.createElement('div');
+            d.className = 'item';
+            d.innerHTML = `<div><strong>${q.name}</strong><br/><small class="mono">${q.id}</small></div>`;
+            const b = document.createElement('button');
+            b.textContent = 'Add';
+            b.onclick = () => fetch(`/api/quest/add?id=${encodeURIComponent(q.id)}`);
+            d.appendChild(b);
+            ques.appendChild(d);
+        });
+    }
+    loadCatalog();
+</script>
+</body>
+</html>
