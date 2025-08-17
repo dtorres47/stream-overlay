@@ -20,13 +20,15 @@
       "id": "call-maam",
       "name": "Call a man \"ma'am\"",
       "price_cents": 499,
-      "icon_url": ""
+      "icon_url": "",
+      "target": 1
     },
     {
       "id": "soundboard-5x",
       "name": "Make 5 calls with X soundboard",
       "price_cents": 399,
-      "icon_url": ""
+      "icon_url": "",
+      "target": 5
     }
   ]
 }

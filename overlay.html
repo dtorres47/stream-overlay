@@ -4,12 +4,16 @@
     <meta charset="utf-8" />
     <title>Overlay</title>
     <style>
-        html,body { margin:0; padding:20px; background:#111; color:#0f0; font-family:system-ui,sans-serif; }
-        .toast { background:rgba(0,0,0,.6); color:#fff; padding:10px; border-radius:8px; margin-top:12px; }
+        html,body { margin:0; padding:20px; background:#111; color:#0f0; font-family:system-ui, sans-serif; }
+        .toast { background:rgba(0,0,0,.6); color:#fff; padding:10px 14px; border-radius:10px; margin-top:12px; }
+        #messages { max-width: 640px; }
         #quests { margin-top:18px; }
         .quest { background:rgba(0,0,0,.5); color:#fff; padding:8px 10px; border-radius:10px; margin-top:8px; }
         #audioGate { position:fixed; top:10px; right:10px; }
         #wsStatus { position:fixed; bottom:10px; right:10px; background:rgba(0,0,0,.5); color:#fff; padding:6px 10px; border-radius:8px; }
+        #requests { margin-top:18px; }
+        .request { background:rgba(0,0,0,.5); color:#fff; padding:8px 10px; border-radius:10px; margin-top:8px; }
+
     </style>
 </head>
 <body>
@@ -17,6 +21,7 @@
 <button id="audioGate">Enable Sound</button>
 <div id="messages"></div>
 <div id="quests"><h3 style="color:#9f9;">Quest Log</h3></div>
+<div id="requests"><h3 style="color:#9f9;">Requests</h3></div>
 <div id="wsStatus">WS: idle</div>
 
 <script>
@@ -24,12 +29,13 @@
     const questList = document.getElementById("quests");
     const audioGateBtn = document.getElementById("audioGate");
     const wsStatus = document.getElementById("wsStatus");
-    const cooldown = new Map();
+    const cooldown = new Map();           // ability cooldowns per id
+    const requestElems = new Map(); // id -> element
+    const requestsList = document.getElementById("requests");
     let audioEnabled = false;
 
-    // ---- audio gate ----
+    // ---- audio gate (needed by some browsers; OBS often not needed) ----
     function enableAudio() {
-        // poke the audio policy (OBS usually doesn’t need this)
         const a = new Audio("data:audio/mp3;base64,//uQZAAAAAAAAAAAAAAAAAAAA"); // tiny silent clip
         a.play().catch(()=>{}).finally(() => {
             audioEnabled = true;
@@ -40,6 +46,7 @@
 
     // ---- helpers ----
     function toast(text) {
+        if (!text) return;
         const d = document.createElement("div");
         d.className = "toast";
         d.textContent = text;
@@ -47,12 +54,15 @@
     }
 
     function play(url) {
-        const a = new Audio(url);
-        a.volume = 0.7;
-        a.play().catch(()=>{});
+        if (!url) return beep();
+        try {
+            const a = new Audio(url);
+            a.volume = 0.7;
+            a.play().catch(()=>{});
+        } catch { /* noop */ }
     }
 
-    function beep(ms=200, freq=880){
+    function beep(ms=200, freq=880) {
         try {
             const C = new (window.AudioContext||window.webkitAudioContext)();
             const o = C.createOscillator(), g = C.createGain();
@@ -60,7 +70,7 @@
             o.type = "square"; o.frequency.value = freq;
             g.gain.setValueAtTime(0.2, C.currentTime);
             o.start(); o.stop(C.currentTime + ms/1000);
-        } catch {}
+        } catch { /* noop */ }
     }
 
     // ---- browser TTS ----
@@ -70,7 +80,7 @@
         const u = new SpeechSynthesisUtterance(text);
         if (voiceHint) {
             const voices = speechSynthesis.getVoices();
-            const match = voices.find(v => v.name.toLowerCase().includes(voiceHint.toLowerCase()));
+            const match = voices.find(v => v.name.toLowerCase().includes(String(voiceHint).toLowerCase()));
             if (match) u.voice = match;
         }
         u.rate = 1.0; u.pitch = 1.0; u.volume = 1.0;
@@ -84,9 +94,32 @@
         }
     }
 
+    // ---- quest rendering with progress + icon support ----
+    function renderRequest(d){
+        const id = d.id;
+        if (!id) return;
+        let el = requestElems.get(id);
+        const label = `${d.board || "(request)"}${d.note ? " — " + d.note : ""}`;
+        const phone = d.masked_phone ? ` <small style="color:#9f9">(${d.masked_phone})</small>` : "";
+        const html = `📞 ${label}${phone}`;
+        if (!el) {
+            el = document.createElement("div");
+            el.className = "request";
+            el.dataset.id = id;
+            requestsList.appendChild(el);
+            requestElems.set(id, el);
+        }
+        el.innerHTML = html;
+    }
+    function removeRequest(id){
+        const el = requestElems.get(id);
+        if (el) { el.remove(); requestElems.delete(id); }
+    }
+
     // ---- WebSocket with auto-reconnect ----
     const wsUrl = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
     let ws, retry = 0;
+
     function connectWS() {
         wsStatus.textContent = "WS: connecting";
         ws = new WebSocket(wsUrl);
@@ -113,42 +146,55 @@
                 const id = d.id || "ability";
                 const until = cooldown.get(id) || 0;
                 const now = Date.now();
-                if (now < until) return;
-                cooldown.set(id, now + 3000);
-                if (d.sfx_url) play(d.sfx_url); else beep();
-            }
-
-            if (msg.type === "QUEST_ADD") {
-                const d = msg.data || {};
-                const el = document.createElement("div");
-                el.className = "quest";
-                if (d.icon_url) {
-                    el.innerHTML =
-                        `<span style="display:inline-flex;align-items:center;gap:8px;">
-                          <img src="${d.icon_url}" style="width:20px;height:20px;vertical-align:middle;" />
-                          <span>${d.name || "Quest"}</span>
-                        </span>`;
-                } else {
-                    el.textContent = `🗡️ ${d.name || "Quest"}`;
+                if (now >= until) {
+                    cooldown.set(id, now + 3000); // 3s per-ability cooldown
+                    d.sfx_url ? play(d.sfx_url) : beep();
                 }
-                questList.appendChild(el);
             }
 
             if (msg.type === "TTS_PLAY") {
                 const d = msg.data || {};
                 speak(d.text, d.voice);
             }
+
+            // New format with progress
+            if (msg.type === "QUEST_UPSERT") {
+                renderQuest(msg.data || {});
+            }
+
+            // Back-compat: plain add with no progress/target
+            if (msg.type === "QUEST_ADD") {
+                const d = msg.data || {};
+                d.progress = d.progress ?? 0;
+                d.target = d.target || 1;
+                renderQuest(d);
+            }
+
+            if (msg.type === "QUEST_REMOVE") {
+                const d = msg.data || {};
+                if (d.id) removeQuest(d.id);
+            }
+
+            if (msg.type === "REQUEST_ADD") {
+                renderRequest(msg.data || {});
+            }
+
+            if (msg.type === "REQUEST_REMOVE") {
+                const d = msg.data || {};
+                if (d.id != null) removeRequest(d.id);
+            }
         };
 
         ws.onclose = () => {
             wsStatus.textContent = "WS: disconnected";
-            const delay = Math.min(30000, 1000 * Math.pow(2, retry++)); // 1s→2s→4s… max 30s
+            const delay = Math.min(30000, 1000 * Math.pow(2, retry++)); // 1s→2s→4s… up to 30s
             wsStatus.textContent = `WS: reconnecting in ${Math.round(delay/1000)}s`;
             setTimeout(connectWS, delay);
         };
 
-        ws.onerror = () => { /* onclose will handle retry */ };
+        ws.onerror = () => { /* let onclose handle retry */ };
     }
+
     connectWS();
 </script>
 </body>
