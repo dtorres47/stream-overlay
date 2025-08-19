@@ -9,32 +9,38 @@
         #messages { max-width: 640px; }
         #quests { margin-top:18px; }
         .quest { background:rgba(0,0,0,.5); color:#fff; padding:8px 10px; border-radius:10px; margin-top:8px; }
-        #audioGate { position:fixed; top:10px; right:10px; }
-        #wsStatus { position:fixed; bottom:10px; right:10px; background:rgba(0,0,0,.5); color:#fff; padding:6px 10px; border-radius:8px; }
         #requests { margin-top:18px; }
         .request { background:rgba(0,0,0,.5); color:#fff; padding:8px 10px; border-radius:10px; margin-top:8px; }
-
+        #audioGate { position:fixed; top:10px; right:10px; }
+        #wsStatus { position:fixed; bottom:10px; right:10px; background:rgba(0,0,0,.5); color:#fff; padding:6px 10px; border-radius:8px; }
     </style>
 </head>
 <body>
 <h2>Overlay Connected ✅</h2>
 <button id="audioGate">Enable Sound</button>
 <div id="messages"></div>
+
 <div id="quests"><h3 style="color:#9f9;">Quest Log</h3></div>
 <div id="requests"><h3 style="color:#9f9;">Requests</h3></div>
+
 <div id="wsStatus">WS: idle</div>
 
 <script>
     const msgs = document.getElementById("messages");
     const questList = document.getElementById("quests");
+    const requestsList = document.getElementById("requests");
     const audioGateBtn = document.getElementById("audioGate");
     const wsStatus = document.getElementById("wsStatus");
-    const cooldown = new Map();           // ability cooldowns per id
-    const requestElems = new Map(); // id -> element
-    const requestsList = document.getElementById("requests");
+
+    // ability state
+    const cooldown = new Map();           // id -> next-allowed timestamp
+    const questElems = new Map();         // id -> element
+    const requestElems = new Map();       // id -> element
+    const audCache = new Map();           // id -> { audio, ready, url, volume }
+
     let audioEnabled = false;
 
-    // ---- audio gate (needed by some browsers; OBS often not needed) ----
+    // ---- audio gate ----
     function enableAudio() {
         const a = new Audio("data:audio/mp3;base64,//uQZAAAAAAAAAAAAAAAAAAAA"); // tiny silent clip
         a.play().catch(()=>{}).finally(() => {
@@ -53,15 +59,6 @@
         msgs.appendChild(d);
     }
 
-    function play(url) {
-        if (!url) return beep();
-        try {
-            const a = new Audio(url);
-            a.volume = 0.7;
-            a.play().catch(()=>{});
-        } catch { /* noop */ }
-    }
-
     function beep(ms=200, freq=880) {
         try {
             const C = new (window.AudioContext||window.webkitAudioContext)();
@@ -70,7 +67,45 @@
             o.type = "square"; o.frequency.value = freq;
             g.gain.setValueAtTime(0.2, C.currentTime);
             o.start(); o.stop(C.currentTime + ms/1000);
-        } catch { /* noop */ }
+        } catch {}
+    }
+
+    function clamp01(x) {
+        x = Number(x);
+        if (!isFinite(x)) return undefined;
+        return Math.max(0, Math.min(1, x));
+    }
+
+    function playAbility(id, url, volume) {
+        // prefer preloaded audio
+        const cached = audCache.get(id);
+        const vol = clamp01(volume);
+        if (cached && cached.audio) {
+            if (url && url !== cached.url) {
+                // URL changed → rebuild cache entry
+                const na = new Audio(url);
+                na.preload = "auto";
+                na.volume = vol ?? cached.volume ?? 0.7;
+                const entry = { audio: na, ready: false, url, volume: na.volume };
+                na.addEventListener("canplaythrough", () => entry.ready = true, { once: true });
+                na.load();
+                audCache.set(id, entry);
+                try { na.currentTime = 0; na.play().catch(()=>{}); } catch {}
+                return;
+            }
+            try {
+                cached.audio.volume = vol ?? cached.volume ?? cached.audio.volume ?? 0.7;
+                cached.audio.currentTime = 0;
+                cached.audio.play().catch(()=>{});
+                return;
+            } catch {}
+        }
+        // fallback (not preloaded)
+        try {
+            const a = new Audio(url);
+            a.volume = vol ?? 0.7;
+            a.play().catch(()=>{});
+        } catch { beep(); }
     }
 
     // ---- browser TTS ----
@@ -86,7 +121,6 @@
         u.rate = 1.0; u.pitch = 1.0; u.volume = 1.0;
         speechSynthesis.speak(u);
     }
-    // warm voices list on some browsers
     if ('speechSynthesis' in window) {
         speechSynthesis.getVoices();
         if (speechSynthesis.onvoiceschanged !== undefined) {
@@ -94,7 +128,41 @@
         }
     }
 
-    // ---- quest rendering with progress + icon support ----
+    // ---- quests ----
+    function renderQuest(d) {
+        const id = d.id;
+        if (!id) return;
+        let el = questElems.get(id);
+        const progress = Number(d.progress ?? 0);
+        const target = Math.max(1, Number(d.target || 1));
+        const label = `${d.name || "Quest"} — ${progress}/${target}`;
+        const html = d.icon_url
+            ? `<span style="display:inline-flex;align-items:center;gap:8px;">
+             <img src="${d.icon_url}" style="width:20px;height:20px;vertical-align:middle;" />
+             <span>${label}</span>
+           </span>`
+            : `🗡️ ${label}`;
+
+        if (!el) {
+            el = document.createElement("div");
+            el.className = "quest";
+            el.dataset.id = id;
+            questList.appendChild(el);
+            questElems.set(id, el);
+        }
+        el.innerHTML = html;
+
+        const done = progress >= target;
+        el.style.opacity = done ? "0.75" : "1";
+        el.style.textDecoration = done ? "line-through" : "none";
+    }
+
+    function removeQuest(id) {
+        const el = questElems.get(id);
+        if (el) { el.remove(); questElems.delete(id); }
+    }
+
+    // ---- requests ----
     function renderRequest(d){
         const id = d.id;
         if (!id) return;
@@ -115,6 +183,29 @@
         const el = requestElems.get(id);
         if (el) { el.remove(); requestElems.delete(id); }
     }
+
+    // ---- preload all ability sounds on load ----
+    async function preloadSounds() {
+        try {
+            const data = await fetch('/api/catalog').then(r => r.json());
+            const list = (data && data.abilities) || [];
+            let count = 0;
+            list.forEach(a => {
+                if (!a || !a.id || !a.sfx_url) return;
+                const entry = { audio: new Audio(a.sfx_url), ready: false, url: a.sfx_url, volume: clamp01(a.volume) ?? 0.7 };
+                entry.audio.preload = "auto";
+                entry.audio.volume = entry.volume;
+                entry.audio.addEventListener("canplaythrough", () => entry.ready = true, { once: true });
+                entry.audio.load();
+                audCache.set(a.id, entry);
+                count++;
+            });
+            if (count) toast(`Preloading ${count} sound${count===1?"":"s"}…`);
+        } catch (e) {
+            // ignore
+        }
+    }
+    window.addEventListener('load', preloadSounds);
 
     // ---- WebSocket with auto-reconnect ----
     const wsUrl = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
@@ -144,11 +235,13 @@
             if (msg.type === "ABILITY_FIRE") {
                 const d = msg.data || {};
                 const id = d.id || "ability";
+                const cd = Number(d.cooldown_ms || 3000);
+                const vol = d.volume;
                 const until = cooldown.get(id) || 0;
                 const now = Date.now();
                 if (now >= until) {
-                    cooldown.set(id, now + 3000); // 3s per-ability cooldown
-                    d.sfx_url ? play(d.sfx_url) : beep();
+                    cooldown.set(id, now + (isFinite(cd) ? cd : 3000));
+                    d.sfx_url ? playAbility(id, d.sfx_url, vol) : beep();
                 }
             }
 
@@ -157,28 +250,19 @@
                 speak(d.text, d.voice);
             }
 
-            // New format with progress
-            if (msg.type === "QUEST_UPSERT") {
-                renderQuest(msg.data || {});
-            }
-
-            // Back-compat: plain add with no progress/target
+            if (msg.type === "QUEST_UPSERT") renderQuest(msg.data || {});
             if (msg.type === "QUEST_ADD") {
                 const d = msg.data || {};
                 d.progress = d.progress ?? 0;
                 d.target = d.target || 1;
                 renderQuest(d);
             }
-
             if (msg.type === "QUEST_REMOVE") {
                 const d = msg.data || {};
                 if (d.id) removeQuest(d.id);
             }
 
-            if (msg.type === "REQUEST_ADD") {
-                renderRequest(msg.data || {});
-            }
-
+            if (msg.type === "REQUEST_ADD")   renderRequest(msg.data || {});
             if (msg.type === "REQUEST_REMOVE") {
                 const d = msg.data || {};
                 if (d.id != null) removeRequest(d.id);
@@ -187,12 +271,12 @@
 
         ws.onclose = () => {
             wsStatus.textContent = "WS: disconnected";
-            const delay = Math.min(30000, 1000 * Math.pow(2, retry++)); // 1s→2s→4s… up to 30s
+            const delay = Math.min(30000, 1000 * Math.pow(2, retry++));
             wsStatus.textContent = `WS: reconnecting in ${Math.round(delay/1000)}s`;
             setTimeout(connectWS, delay);
         };
 
-        ws.onerror = () => { /* let onclose handle retry */ };
+        ws.onerror = () => { /* handled by onclose */ };
     }
 
     connectWS();

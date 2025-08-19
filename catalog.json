@@ -5,14 +5,18 @@
       "name": "T-Rex Roar",
       "price_cents": 300,
       "sfx_url": "https://interactive-examples.mdn.mozilla.net/media/cc0-audio/t-rex-roar.mp3",
-      "icon_url": ""
+      "icon_url": "",
+      "cooldown_ms": 3000,
+      "volume": 0.7
     },
     {
       "id": "goat",
       "name": "Goat Noises",
       "price_cents": 200,
       "sfx_url": "https://www.soundjay.com/buttons/sounds/button-3.mp3",
-      "icon_url": ""
+      "icon_url": "",
+      "cooldown_ms": 2500,
+      "volume": 0.8
     }
   ],
   "quests": [

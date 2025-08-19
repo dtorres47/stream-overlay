@@ -65,18 +65,20 @@ func clientsCount() int {
 
 // ─── Catalog types & loader (file-backed) ────────────────────────────────────
 type Ability struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	PriceCents int64  `json:"price_cents"`
-	SFXURL     string `json:"sfx_url"`
-	IconURL    string `json:"icon_url"`
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	PriceCents int64   `json:"price_cents"`
+	SFXURL     string  `json:"sfx_url"`
+	IconURL    string  `json:"icon_url"`
+	CooldownMs int     `json:"cooldown_ms"`
+	Volume     float64 `json:"volume"`
 }
 type Quest struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
 	PriceCents int64  `json:"price_cents"`
 	IconURL    string `json:"icon_url"`
-	Target     int    `json:"target"` // optional in file; defaults to 1
+	Target     int    `json:"target"`
 }
 
 var (
@@ -437,7 +439,14 @@ func main() {
 		}
 		broadcast(wsMsg{
 			Type: "ABILITY_FIRE",
-			Data: map[string]any{"id": a.ID, "name": a.Name, "sfx_url": a.SFXURL, "price_cents": a.PriceCents},
+			Data: map[string]any{
+				"id":          a.ID,
+				"name":        a.Name,
+				"sfx_url":     a.SFXURL,
+				"price_cents": a.PriceCents,
+				"cooldown_ms": a.CooldownMs,
+				"volume":      a.Volume,
+			},
 		})
 		w.Write([]byte("Sent ability"))
 	})
