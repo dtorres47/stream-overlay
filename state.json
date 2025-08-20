@@ -1,0 +1,18 @@
+{
+  "active_quests": [
+    {
+      "id": "soundboard-5x",
+      "name": "Make 5 calls with X soundboard",
+      "target": 5,
+      "progress": 0,
+      "icon_url": "",
+      "price_cents": 399
+    }
+  ],
+  "requests_pending": [],
+  "requests_active": [],
+  "tts_queue": [],
+  "req_seq": 0,
+  "tts_seq": 0,
+  "saved_at_unix": 1755667107
+}

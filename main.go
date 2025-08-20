@@ -78,7 +78,7 @@ type Quest struct {
 	Name       string `json:"name"`
 	PriceCents int64  `json:"price_cents"`
 	IconURL    string `json:"icon_url"`
-	Target     int    `json:"target"`
+	Target     int    `json:"target"` // optional; defaults to 1
 }
 
 var (
@@ -96,8 +96,8 @@ func loadCatalogFromDisk() {
 	if err != nil {
 		log.Println("catalog.json not found; using built-in defaults")
 		abilities = map[string]Ability{
-			"trex": {ID: "trex", Name: "T-Rex Roar", PriceCents: 300, SFXURL: "https://interactive-examples.mdn.mozilla.net/media/cc0-audio/t-rex-roar.mp3"},
-			"goat": {ID: "goat", Name: "Goat Noises", PriceCents: 200, SFXURL: "https://www.soundjay.com/buttons/sounds/button-3.mp3"},
+			"trex": {ID: "trex", Name: "T-Rex Roar", PriceCents: 300, SFXURL: "https://interactive-examples.mdn.mozilla.net/media/cc0-audio/t-rex-roar.mp3", CooldownMs: 3000, Volume: 0.7},
+			"goat": {ID: "goat", Name: "Goat Noises", PriceCents: 200, SFXURL: "https://www.soundjay.com/buttons/sounds/button-3.mp3", CooldownMs: 2500, Volume: 0.8},
 		}
 		quests = map[string]Quest{
 			"call-maam":     {ID: "call-maam", Name: `Call a man "ma'am"`, PriceCents: 499, Target: 1},
@@ -124,7 +124,7 @@ func loadCatalogFromDisk() {
 	log.Printf("catalog loaded: %d abilities, %d quests\n", len(abilities), len(quests))
 }
 
-// ─── Quest progress state (in-memory) ────────────────────────────────────────
+// ─── Quest progress state ────────────────────────────────────────────────────
 type QuestState struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
@@ -178,7 +178,7 @@ func listActiveQuests() []QuestState {
 	return out
 }
 
-// ─── TTS moderation queue (in-memory) ────────────────────────────────────────
+// ─── TTS moderation queue ────────────────────────────────────────────────────
 type TTSItem struct {
 	ID          int    `json:"id"`
 	Text        string `json:"text"`
@@ -219,12 +219,12 @@ func ttsFind(id int) (*TTSItem, bool) {
 	return nil, false
 }
 
-// ─── Requests (board + phone) with masking ───────────────────────────────────
+// ─── Requests (board + phone) ────────────────────────────────────────────────
 type RequestItem struct {
 	ID          int    `json:"id"`
 	Board       string `json:"board"`
 	Phone       string `json:"phone"`        // full digits (panel only)
-	MaskedPhone string `json:"masked_phone"` // for overlay
+	MaskedPhone string `json:"masked_phone"` // overlay-safe
 	Note        string `json:"note"`
 	Status      string `json:"status"` // pending, approved, rejected, completed
 	CreatedUnix int64  `json:"created_unix"`
@@ -246,12 +246,10 @@ func digitsOnly(s string) string {
 	}
 	return b.String()
 }
-
 func maskPhone(d string) string {
 	if d == "" {
 		return ""
 	}
-	// US-ish formatting for 10/11 digits; fallback for others
 	if len(d) == 10 {
 		return fmt.Sprintf("***-***-%s", d[6:])
 	}
@@ -265,6 +263,7 @@ func maskPhone(d string) string {
 	return fmt.Sprintf("***-%s", last4)
 }
 
+// List pending requests (status == "pending")
 func requestsListPending() []RequestItem {
 	reqMu.Lock()
 	defer reqMu.Unlock()
@@ -277,6 +276,7 @@ func requestsListPending() []RequestItem {
 	return out
 }
 
+// List active (approved) requests
 func requestsListActive() []RequestItem {
 	reqMu.Lock()
 	defer reqMu.Unlock()
@@ -287,6 +287,7 @@ func requestsListActive() []RequestItem {
 	return out
 }
 
+// Find a request by id in either pending queue or active map
 func requestFind(id int) (*RequestItem, bool) {
 	reqMu.Lock()
 	defer reqMu.Unlock()
@@ -301,9 +302,127 @@ func requestFind(id int) (*RequestItem, bool) {
 	return nil, false
 }
 
+// ─── Persistent state (save/restore) ────────────────────────────────────────
+type PersistState struct {
+	ActiveQuests    []QuestState   `json:"active_quests"`
+	RequestsPending []*RequestItem `json:"requests_pending"`
+	RequestsActive  []*RequestItem `json:"requests_active"`
+	TTSQueue        []*TTSItem     `json:"tts_queue"`
+	ReqSeq          int            `json:"req_seq"`
+	TTSSeq          int            `json:"tts_seq"`
+	SavedAtUnix     int64          `json:"saved_at_unix"`
+}
+
+func saveState() {
+	ps := PersistState{SavedAtUnix: time.Now().Unix()}
+	// copy active quests
+	ps.ActiveQuests = listActiveQuests()
+	// copy requests
+	reqMu.Lock()
+	ps.RequestsPending = make([]*RequestItem, len(reqQueue))
+	copy(ps.RequestsPending, reqQueue)
+	ps.RequestsActive = make([]*RequestItem, 0, len(reqActive))
+	for _, it := range reqActive {
+		ps.RequestsActive = append(ps.RequestsActive, it)
+	}
+	ps.ReqSeq = reqSeq
+	reqMu.Unlock()
+	// copy TTS
+	ttsMu.Lock()
+	ps.TTSQueue = make([]*TTSItem, len(ttsQueue))
+	copy(ps.TTSQueue, ttsQueue)
+	ps.TTSSeq = ttsSeq
+	ttsMu.Unlock()
+
+	b, err := json.MarshalIndent(ps, "", "  ")
+	if err != nil {
+		log.Println("state marshal error:", err)
+		return
+	}
+	tmp := "state.json.tmp"
+	final := "state.json"
+	if err := os.WriteFile(tmp, b, 0644); err != nil {
+		log.Println("state write error:", err)
+		return
+	}
+	if err := os.Rename(tmp, final); err != nil {
+		log.Println("state rename error:", err)
+		return
+	}
+	log.Printf("state saved: %d quests, %d pending req, %d active req, %d tts\n",
+		len(ps.ActiveQuests), len(ps.RequestsPending), len(ps.RequestsActive), len(ps.TTSQueue))
+}
+
+func loadState() {
+	b, err := os.ReadFile("state.json")
+	if err != nil {
+		return // no prior state
+	}
+	var ps PersistState
+	if err := json.Unmarshal(b, &ps); err != nil {
+		log.Println("state parse error:", err)
+		return
+	}
+	// restore active quests
+	activeMu.Lock()
+	activeQuests = map[string]*QuestState{}
+	for _, qs := range ps.ActiveQuests {
+		qc := qs
+		activeQuests[qs.ID] = &qc
+	}
+	activeMu.Unlock()
+	// restore requests
+	reqMu.Lock()
+	reqQueue = []*RequestItem{}
+	for _, it := range ps.RequestsPending {
+		reqQueue = append(reqQueue, it)
+	}
+	reqActive = map[int]*RequestItem{}
+	for _, it := range ps.RequestsActive {
+		reqActive[it.ID] = it
+	}
+	reqSeq = ps.ReqSeq
+	reqMu.Unlock()
+	// restore TTS
+	ttsMu.Lock()
+	ttsQueue = []*TTSItem{}
+	for _, it := range ps.TTSQueue {
+		ttsQueue = append(ttsQueue, it)
+	}
+	ttsSeq = ps.TTSSeq
+	ttsMu.Unlock()
+
+	log.Printf("state loaded: %d quests, %d pending req, %d active req, %d tts\n",
+		len(ps.ActiveQuests), len(ps.RequestsPending), len(ps.RequestsActive), len(ps.TTSQueue))
+}
+
+// rebroadcast current visible state to overlay (after reconnect or restart)
+func rebroadcastOverlay() {
+	// quests
+	for _, qs := range listActiveQuests() {
+		qsCopy := qs
+		broadcast(wsMsg{Type: "QUEST_UPSERT", Data: &qsCopy})
+	}
+	// requests (masked)
+	reqMu.Lock()
+	for _, it := range reqActive {
+		broadcast(wsMsg{
+			Type: "REQUEST_ADD",
+			Data: map[string]any{
+				"id":           it.ID,
+				"board":        it.Board,
+				"masked_phone": it.MaskedPhone,
+				"note":         it.Note,
+			},
+		})
+	}
+	reqMu.Unlock()
+}
+
 // ─── Server setup ────────────────────────────────────────────────────────────
 func main() {
 	loadCatalogFromDisk()
+	loadState() // <- restore prior session if present
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -404,9 +523,17 @@ func main() {
 		w.Write([]byte("ok"))
 	})
 
-	// Debug
+	// Debug/state helpers
 	r.Get("/api/debug/clients", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "clients: %d\n", clientsCount())
+	})
+	r.Post("/api/state/save", func(w http.ResponseWriter, r *http.Request) {
+		saveState()
+		w.Write([]byte("ok"))
+	})
+	r.Post("/api/state/rehydrate", func(w http.ResponseWriter, r *http.Request) {
+		rebroadcastOverlay()
+		w.Write([]byte("ok"))
 	})
 
 	// Donation toast (manual)
@@ -451,7 +578,7 @@ func main() {
 		w.Write([]byte("Sent ability"))
 	})
 
-	// TTS (direct speak test — bypasses queue)
+	// TTS (direct test)
 	r.Get("/api/test/tts", func(w http.ResponseWriter, r *http.Request) {
 		text := r.URL.Query().Get("text")
 		voice := r.URL.Query().Get("voice")
@@ -463,7 +590,7 @@ func main() {
 		w.Write([]byte("Sent TTS"))
 	})
 
-	// ─── Quest progress endpoints ────────────────────────────────────────────
+	// ─── Quest endpoints ─────────────────────────────────────────────────────
 	r.Get("/api/quest/add", func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
 		q, ok := quests[id]
@@ -475,6 +602,7 @@ func main() {
 			q.Target = 1
 		}
 		upsertQuestState(q)
+		saveState()
 		w.Write([]byte("Quest upserted"))
 	})
 	r.Get("/api/quest/active", func(w http.ResponseWriter, r *http.Request) {
@@ -485,10 +613,8 @@ func main() {
 		id := r.URL.Query().Get("id")
 		activeMu.Lock()
 		qs, ok := activeQuests[id]
-		if ok {
-			if qs.Progress < qs.Target {
-				qs.Progress++
-			}
+		if ok && qs.Progress < qs.Target {
+			qs.Progress++
 		}
 		activeMu.Unlock()
 		if !ok {
@@ -496,6 +622,7 @@ func main() {
 			return
 		}
 		broadcast(wsMsg{Type: "QUEST_UPSERT", Data: qs})
+		saveState()
 		w.Write([]byte("ok"))
 	})
 	r.Post("/api/quest/reset", func(w http.ResponseWriter, r *http.Request) {
@@ -511,6 +638,7 @@ func main() {
 			return
 		}
 		broadcast(wsMsg{Type: "QUEST_UPSERT", Data: qs})
+		saveState()
 		w.Write([]byte("ok"))
 	})
 	r.Post("/api/quest/remove", func(w http.ResponseWriter, r *http.Request) {
@@ -526,10 +654,11 @@ func main() {
 			return
 		}
 		broadcast(wsMsg{Type: "QUEST_REMOVE", Data: map[string]any{"id": id}})
+		saveState()
 		w.Write([]byte("ok"))
 	})
 
-	// ─── TTS moderation queue endpoints ──────────────────────────────────────
+	// ─── TTS moderation queue ────────────────────────────────────────────────
 	r.Get("/api/tts/submit", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		text := q.Get("text")
@@ -560,6 +689,7 @@ func main() {
 		}
 		ttsQueue = append(ttsQueue, item)
 		ttsMu.Unlock()
+		saveState()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(item)
 	})
@@ -579,7 +709,6 @@ func main() {
 		it.Status = "approved"
 		ttsMu.Unlock()
 
-		// Optional toast
 		if it.Donor != "" || it.AmountCents > 0 || it.Msg != "" {
 			broadcast(wsMsg{
 				Type: "DONATION",
@@ -590,12 +719,12 @@ func main() {
 				},
 			})
 		}
-		// Speak
 		broadcast(wsMsg{Type: "TTS_PLAY", Data: map[string]any{"text": it.Text, "voice": it.Voice}})
 
 		ttsMu.Lock()
 		it.Status = "spoken"
 		ttsMu.Unlock()
+		saveState()
 		w.Write([]byte("ok"))
 	})
 	r.Post("/api/tts/reject", func(w http.ResponseWriter, r *http.Request) {
@@ -609,11 +738,11 @@ func main() {
 		ttsMu.Lock()
 		it.Status = "rejected"
 		ttsMu.Unlock()
+		saveState()
 		w.Write([]byte("ok"))
 	})
 
-	// ─── Requests: submit → moderate → show on overlay ───────────────────────
-	// Submit (viewer simulation). Either board or phone (or both) must be provided.
+	// ─── Requests: submit → moderate → overlay ───────────────────────────────
 	r.Get("/api/request/submit", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		board := strings.TrimSpace(q.Get("board"))
@@ -636,23 +765,20 @@ func main() {
 		item.ID = reqSeq
 		reqQueue = append(reqQueue, item)
 		reqMu.Unlock()
+		saveState()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(item)
 	})
-
-	// List pending requests (panel shows full phone)
 	r.Get("/api/request/queue", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(requestsListPending())
+		out := requestsListPending()
+		_ = json.NewEncoder(w).Encode(out)
 	})
-
-	// List active requests (approved, for panel controls)
 	r.Get("/api/request/active", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(requestsListActive())
+		out := requestsListActive()
+		_ = json.NewEncoder(w).Encode(out)
 	})
-
-	// Approve → add to active and broadcast masked info to overlay
 	r.Post("/api/request/approve", func(w http.ResponseWriter, r *http.Request) {
 		idStr := r.URL.Query().Get("id")
 		id, _ := strconv.Atoi(idStr)
@@ -665,8 +791,7 @@ func main() {
 		it.Status = "approved"
 		reqActive[it.ID] = it
 		reqMu.Unlock()
-
-		// Broadcast masked details only
+		saveState()
 		broadcast(wsMsg{
 			Type: "REQUEST_ADD",
 			Data: map[string]any{
@@ -678,8 +803,6 @@ func main() {
 		})
 		w.Write([]byte("ok"))
 	})
-
-	// Reject (remains in queue history, not active)
 	r.Post("/api/request/reject", func(w http.ResponseWriter, r *http.Request) {
 		idStr := r.URL.Query().Get("id")
 		id, _ := strconv.Atoi(idStr)
@@ -691,10 +814,9 @@ func main() {
 		reqMu.Lock()
 		it.Status = "rejected"
 		reqMu.Unlock()
+		saveState()
 		w.Write([]byte("ok"))
 	})
-
-	// Complete → remove from active and remove from overlay
 	r.Post("/api/request/complete", func(w http.ResponseWriter, r *http.Request) {
 		idStr := r.URL.Query().Get("id")
 		id, _ := strconv.Atoi(idStr)
@@ -708,6 +830,7 @@ func main() {
 			http.Error(w, "unknown active request id", http.StatusNotFound)
 			return
 		}
+		saveState()
 		broadcast(wsMsg{Type: "REQUEST_REMOVE", Data: map[string]any{"id": id}})
 		w.Write([]byte("ok"))
 	})
