@@ -1,0 +1,42 @@
+name: Build & Deploy Stream Overlay
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Check out your portfolio-site repo
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # 2. Make sure build.sh is executable
+      - name: Enable build script
+        run: chmod +x ./build.sh
+
+      # 3. (Optional) Set up Go if your build.sh needs it
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.24.x'
+
+      # 4. Run your build script
+      - name: Run build.sh
+        run: |
+          ./build.sh
+
+      # 5. (Optional) Deploy artifacts
+      #    If you already have AWS creds in Secrets and a deploy command:
+      - name: Deploy to AWS
+        if: success()
+        env:
+          AWS_ACCESS_KEY_ID:  ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          # Example: sync your build folder to S3
+          aws s3 sync build/stream-overlay-web s3://your-bucket-name/web
+          aws s3 cp build/stream-overlay-server s3://your-bucket-name/bin/stream-overlay-server
