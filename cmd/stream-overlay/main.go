@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/dtorres47/stream-overlay/internal/catalog"
 	"github.com/dtorres47/stream-overlay/internal/quests"
@@ -76,7 +77,18 @@ func main() {
 		fmt.Fprintf(w, "%d\n", ws.ClientsCount())
 	})
 
-	addr := ":3000"
+	// Health check for CI/CD & AWS
+	r.Get("/api/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"status":"ok","service":"stream-overlay"}`)
+	})
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "3000"
+	}
+	addr := ":" + port
+
 	log.Printf("Server listening on http://localhost%v", addr)
 	log.Fatal(http.ListenAndServe(addr, r))
 }
