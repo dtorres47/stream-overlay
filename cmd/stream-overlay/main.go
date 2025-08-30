@@ -18,7 +18,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-//go:embed web/overlay.html
+//go:embed web/index.html
 var overlayHTML []byte
 
 //go:embed web/panel.html
