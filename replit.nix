@@ -1,6 +1,6 @@
 { pkgs }: {
   deps = [
-    pkgs.go_1_20
+    pkgs.go
     pkgs.git
   ];
 }
