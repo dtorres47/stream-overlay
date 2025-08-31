@@ -35,8 +35,9 @@ func main() {
 	r.Use(middleware.RedirectSlashes)
 
 	// Serve static assets (css/js)
-	r.Handle("/css/*", http.StripPrefix("/css/", http.FileServer(http.Dir("web/css"))))
-	r.Handle("/js/*", http.StripPrefix("/js/", http.FileServer(http.Dir("web/js"))))
+	r.Handle("/css/*", http.StripPrefix("/css/", http.FileServer(http.Dir("cmd/stream-overlay/web/css"))))
+	r.Handle("/js/*", http.StripPrefix("/js/", http.FileServer(http.Dir("cmd/stream-overlay/web/js"))))
+	r.Handle("/assets/*", http.StripPrefix("/assets/", http.FileServer(http.Dir("cmd/stream-overlay/web/assets"))))
 
 	// Home page
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
