@@ -1,2 +1,6 @@
 language = "bash"
 run      = "source ./init-go.sh && go run cmd/stream-overlay/main.go"
+
+[[ports]]
+localPort = 3000
+externalPort = 80
