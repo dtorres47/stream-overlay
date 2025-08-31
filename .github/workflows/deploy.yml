@@ -1,48 +1,42 @@
-name: Build & Deploy
+name: Build & Deploy Stream Overlay
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+
     steps:
-      # 1. Check out your portfolio-site repo
-      - uses: actions/checkout@v3
+      # 1. Check out the repository
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-      # 2. (If you use a submodule) initialize it
-      # - run: git submodule update --init --recursive
-
-      # 3. Install Go
+      # 2. Set up Go for your build script
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version: '1.24.x'
 
-      # 4. Build your stream-overlay app
-      - name: Build stream-overlay
-        run: |
-          cd stream-overlay
-          go mod tidy
-          go build -o ../build/stream-overlay-server ./cmd/stream-overlay
+      # 3. Ensure your build script is executable
+      - name: Make build.sh executable
+        run: chmod +x ./build.sh
 
-      # 5. Copy static assets (HTML, JS, CSS, sounds) into build area
-      - name: Copy static web files
-        run: |
-          mkdir -p build/stream-overlay-web
-          cp -R stream-overlay/web build/stream-overlay-web
+      # 4. Run build.sh (produces build/stream-overlay-web with index.html, panel.html, etc.)
+      - name: Run build script
+        run: ./build.sh
 
-      # 6. (Optional) You can add version info
-      - name: Write VERSION file
-        run: echo "$(git rev-parse --short HEAD)" > build/VERSION
-
-      # 7. Deploy step (whatever you already have configured—
-      #    e.g. rsync to EC2, `aws s3 sync`, Elastic Beanstalk, etc.)
-      - name: Deploy to AWS
+      # 5. Deploy static files to S3
+      - name: Deploy static site to S3
         env:
+          AWS_S3_BUCKET: david-portfolio-site
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: us-east-1
         run: |
-          # Example: sync to an S3 bucket or copy binaries to EC2
-          aws s3 sync build s3://my-bucket/stream-overlay
+          # Copy your index.html to the bucket root so it becomes the homepage
+          aws s3 cp build/stream-overlay-web/index.html s3://$AWS_S3_BUCKET/index.html --acl public-read
+          # Sync the rest of your static files (panel.html, assets) under a subfolder
+          aws s3 sync build/stream-overlay-web s3://$AWS_S3_BUCKET/stream-overlay-web --acl public-read --delete

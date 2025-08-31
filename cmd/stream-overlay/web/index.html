@@ -1,285 +1,334 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-    <meta charset="utf-8" />
-    <title>Overlay</title>
-    <style>
-        html,body { margin:0; padding:20px; background:#111; color:#0f0; font-family:system-ui, sans-serif; }
-        .toast { background:rgba(0,0,0,.6); color:#fff; padding:10px 14px; border-radius:10px; margin-top:12px; }
-        #messages { max-width: 640px; }
-        #quests { margin-top:18px; }
-        .quest { background:rgba(0,0,0,.5); color:#fff; padding:8px 10px; border-radius:10px; margin-top:8px; }
-        #requests { margin-top:18px; }
-        .request { background:rgba(0,0,0,.5); color:#fff; padding:8px 10px; border-radius:10px; margin-top:8px; }
-        #audioGate { position:fixed; top:10px; right:10px; }
-        #wsStatus { position:fixed; bottom:10px; right:10px; background:rgba(0,0,0,.5); color:#fff; padding:6px 10px; border-radius:8px; }
-    </style>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stream Overlay</title>
+    <link rel="stylesheet" href="css/overlay.css" />
 </head>
 <body>
-<h2>Overlay Connected ✅</h2>
-<button id="audioGate">Enable Sound</button>
-<div id="messages"></div>
+<div class="overlay-wrapper">
+    <header class="overlay-header">
+        <div class="logo-title">
+            <img src="assets/logo.png" alt="Logo" class="logo" />
+            <h1>Live Stream</h1>
+        </div>
+        <button id="audioGate" class="btn btn-primary">Enable Sound</button>
+    </header>
 
-<div id="quests"><h3 style="color:#9f9;">Quest Log</h3></div>
-<div id="requests"><h3 style="color:#9f9;">Requests</h3></div>
+    <main class="overlay-content">
+        <section class="card alerts">
+            <h2>Alerts & Donations</h2>
+            <div id="messages" class="messages" aria-live="polite"></div>
+        </section>
 
-<div id="wsStatus">WS: idle</div>
+        <section class="card side-cards">
+            <div class="side-card quests">
+                <h2>Quest Log</h2>
+                <div id="quests" class="list"></div>
+            </div>
+            <div class="side-card requests">
+                <h2>Requests</h2>
+                <div id="requests" class="list"></div>
+            </div>
+        </section>
+    </main>
 
-<script>
-    const msgs = document.getElementById("messages");
-    const questList = document.getElementById("quests");
-    const requestsList = document.getElementById("requests");
-    const audioGateBtn = document.getElementById("audioGate");
-    const wsStatus = document.getElementById("wsStatus");
+    <footer class="overlay-footer">
+        <div id="wsStatus" class="status">WS: idle</div>
+    </footer>
+</div>
 
-    // ability state
-    const cooldown = new Map();           // id -> next-allowed timestamp
-    const questElems = new Map();         // id -> element
-    const requestElems = new Map();       // id -> element
-    const audCache = new Map();           // id -> { audio, ready, url, volume }
-
-    let audioEnabled = false;
-
-    // ---- audio gate ----
-    function enableAudio() {
-        const a = new Audio("data:audio/mp3;base64,//uQZAAAAAAAAAAAAAAAAAAAA"); // tiny silent clip
-        a.play().catch(()=>{}).finally(() => {
-            audioEnabled = true;
-            audioGateBtn.style.display = "none";
-        });
-    }
-    audioGateBtn.addEventListener("click", enableAudio);
-
-    // ---- helpers ----
-    function toast(text) {
-        if (!text) return;
-        const d = document.createElement("div");
-        d.className = "toast";
-        d.textContent = text;
-        msgs.appendChild(d);
-    }
-
-    function beep(ms=200, freq=880) {
-        try {
-            const C = new (window.AudioContext||window.webkitAudioContext)();
-            const o = C.createOscillator(), g = C.createGain();
-            o.connect(g); g.connect(C.destination);
-            o.type = "square"; o.frequency.value = freq;
-            g.gain.setValueAtTime(0.2, C.currentTime);
-            o.start(); o.stop(C.currentTime + ms/1000);
-        } catch {}
-    }
-
-    function clamp01(x) {
-        x = Number(x);
-        if (!isFinite(x)) return undefined;
-        return Math.max(0, Math.min(1, x));
-    }
-
-    function playAbility(id, url, volume) {
-        // prefer preloaded audio
-        const cached = audCache.get(id);
-        const vol = clamp01(volume);
-        if (cached && cached.audio) {
-            if (url && url !== cached.url) {
-                // URL changed → rebuild cache entry
-                const na = new Audio(url);
-                na.preload = "auto";
-                na.volume = vol ?? cached.volume ?? 0.7;
-                const entry = { audio: na, ready: false, url, volume: na.volume };
-                na.addEventListener("canplaythrough", () => entry.ready = true, { once: true });
-                na.load();
-                audCache.set(id, entry);
-                try { na.currentTime = 0; na.play().catch(()=>{}); } catch {}
-                return;
-            }
-            try {
-                cached.audio.volume = vol ?? cached.volume ?? cached.audio.volume ?? 0.7;
-                cached.audio.currentTime = 0;
-                cached.audio.play().catch(()=>{});
-                return;
-            } catch {}
-        }
-        // fallback (not preloaded)
-        try {
-            const a = new Audio(url);
-            a.volume = vol ?? 0.7;
-            a.play().catch(()=>{});
-        } catch { beep(); }
-    }
-
-    // ---- browser TTS ----
-    function speak(text, voiceHint) {
-        if (!("speechSynthesis" in window)) { toast("TTS not supported"); return; }
-        if (!text) return;
-        const u = new SpeechSynthesisUtterance(text);
-        if (voiceHint) {
-            const voices = speechSynthesis.getVoices();
-            const match = voices.find(v => v.name.toLowerCase().includes(String(voiceHint).toLowerCase()));
-            if (match) u.voice = match;
-        }
-        u.rate = 1.0; u.pitch = 1.0; u.volume = 1.0;
-        speechSynthesis.speak(u);
-    }
-    if ('speechSynthesis' in window) {
-        speechSynthesis.getVoices();
-        if (speechSynthesis.onvoiceschanged !== undefined) {
-            speechSynthesis.onvoiceschanged = () => {};
-        }
-    }
-
-    // ---- quests ----
-    function renderQuest(d) {
-        const id = d.id;
-        if (!id) return;
-        let el = questElems.get(id);
-        const progress = Number(d.progress ?? 0);
-        const target = Math.max(1, Number(d.target || 1));
-        const label = `${d.name || "Quest"} — ${progress}/${target}`;
-        const html = d.icon_url
-            ? `<span style="display:inline-flex;align-items:center;gap:8px;">
-             <img src="${d.icon_url}" style="width:20px;height:20px;vertical-align:middle;" />
-             <span>${label}</span>
-           </span>`
-            : `🗡️ ${label}`;
-
-        if (!el) {
-            el = document.createElement("div");
-            el.className = "quest";
-            el.dataset.id = id;
-            questList.appendChild(el);
-            questElems.set(id, el);
-        }
-        el.innerHTML = html;
-
-        const done = progress >= target;
-        el.style.opacity = done ? "0.75" : "1";
-        el.style.textDecoration = done ? "line-through" : "none";
-    }
-
-    function removeQuest(id) {
-        const el = questElems.get(id);
-        if (el) { el.remove(); questElems.delete(id); }
-    }
-
-    // ---- requests ----
-    function renderRequest(d){
-        const id = d.id;
-        if (!id) return;
-        let el = requestElems.get(id);
-        const label = `${d.board || "(request)"}${d.note ? " — " + d.note : ""}`;
-        const phone = d.masked_phone ? ` <small style="color:#9f9">(${d.masked_phone})</small>` : "";
-        const html = `📞 ${label}${phone}`;
-        if (!el) {
-            el = document.createElement("div");
-            el.className = "request";
-            el.dataset.id = id;
-            requestsList.appendChild(el);
-            requestElems.set(id, el);
-        }
-        el.innerHTML = html;
-    }
-    function removeRequest(id){
-        const el = requestElems.get(id);
-        if (el) { el.remove(); requestElems.delete(id); }
-    }
-
-    // ---- preload all ability sounds on load ----
-    async function preloadSounds() {
-        try {
-            const data = await fetch('/api/catalog').then(r => r.json());
-            const list = (data && data.abilities) || [];
-            let count = 0;
-            list.forEach(a => {
-                if (!a || !a.id || !a.sfx_url) return;
-                const entry = { audio: new Audio(a.sfx_url), ready: false, url: a.sfx_url, volume: clamp01(a.volume) ?? 0.7 };
-                entry.audio.preload = "auto";
-                entry.audio.volume = entry.volume;
-                entry.audio.addEventListener("canplaythrough", () => entry.ready = true, { once: true });
-                entry.audio.load();
-                audCache.set(a.id, entry);
-                count++;
-            });
-            if (count) toast(`Preloading ${count} sound${count===1?"":"s"}…`);
-        } catch (e) {
-            // ignore
-        }
-    }
-    window.addEventListener('load', preloadSounds);
-
-    // ---- WebSocket with auto-reconnect ----
-    const wsUrl = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
-    let ws, retry = 0;
-
-    function connectWS() {
-        wsStatus.textContent = "WS: connecting";
-        ws = new WebSocket(wsUrl);
-
-        ws.onopen = () => {
-            retry = 0;
-            wsStatus.textContent = "WS: connected";
-            toast("WebSocket open → " + wsUrl);
-        };
-
-        ws.onmessage = (event) => {
-            let msg; try { msg = JSON.parse(event.data); } catch { return; }
-            if (!msg || !msg.type) return;
-
-            if (msg.type === "DONATION") {
-                const d = msg.data || {};
-                const cents = Number(d.amount || 0);
-                const dollars = isFinite(cents) ? (cents/100).toFixed(2) : "0.00";
-                toast(`💸 ${d.donor || "Anonymous"} donated $${dollars}${d.msg ? " — " + d.msg : ""}`);
-            }
-
-            if (msg.type === "ABILITY_FIRE") {
-                const d = msg.data || {};
-                const id = d.id || "ability";
-                const cd = Number(d.cooldown_ms || 3000);
-                const vol = d.volume;
-                const until = cooldown.get(id) || 0;
-                const now = Date.now();
-                if (now >= until) {
-                    cooldown.set(id, now + (isFinite(cd) ? cd : 3000));
-                    d.sfx_url ? playAbility(id, d.sfx_url, vol) : beep();
-                }
-            }
-
-            if (msg.type === "TTS_PLAY") {
-                const d = msg.data || {};
-                speak(d.text, d.voice);
-            }
-
-            if (msg.type === "QUEST_UPSERT") renderQuest(msg.data || {});
-            if (msg.type === "QUEST_ADD") {
-                const d = msg.data || {};
-                d.progress = d.progress ?? 0;
-                d.target = d.target || 1;
-                renderQuest(d);
-            }
-            if (msg.type === "QUEST_REMOVE") {
-                const d = msg.data || {};
-                if (d.id) removeQuest(d.id);
-            }
-
-            if (msg.type === "REQUEST_ADD")   renderRequest(msg.data || {});
-            if (msg.type === "REQUEST_REMOVE") {
-                const d = msg.data || {};
-                if (d.id != null) removeRequest(d.id);
-            }
-        };
-
-        ws.onclose = () => {
-            wsStatus.textContent = "WS: disconnected";
-            const delay = Math.min(30000, 1000 * Math.pow(2, retry++));
-            wsStatus.textContent = `WS: reconnecting in ${Math.round(delay/1000)}s`;
-            setTimeout(connectWS, delay);
-        };
-
-        ws.onerror = () => { /* handled by onclose */ };
-    }
-
-    connectWS();
-</script>
+<script src="js/overlay.js"></script>
 </body>
 </html>
+
+
+
+
+
+<!--<!doctype html>-->
+<!--<html>-->
+<!--<head>-->
+<!--    <meta charset="utf-8" />-->
+<!--    <title>Overlay</title>-->
+<!--    <style>-->
+<!--        html,body { margin:0; padding:20px; background:#111; color:#0f0; font-family:system-ui, sans-serif; }-->
+<!--        .toast { background:rgba(0,0,0,.6); color:#fff; padding:10px 14px; border-radius:10px; margin-top:12px; }-->
+<!--        #messages { max-width: 640px; }-->
+<!--        #quests { margin-top:18px; }-->
+<!--        .quest { background:rgba(0,0,0,.5); color:#fff; padding:8px 10px; border-radius:10px; margin-top:8px; }-->
+<!--        #requests { margin-top:18px; }-->
+<!--        .request { background:rgba(0,0,0,.5); color:#fff; padding:8px 10px; border-radius:10px; margin-top:8px; }-->
+<!--        #audioGate { position:fixed; top:10px; right:10px; }-->
+<!--        #wsStatus { position:fixed; bottom:10px; right:10px; background:rgba(0,0,0,.5); color:#fff; padding:6px 10px; border-radius:8px; }-->
+<!--    </style>-->
+<!--</head>-->
+<!--<body>-->
+<!--<h2>Overlay Connected ✅</h2>-->
+<!--<button id="audioGate">Enable Sound</button>-->
+<!--<div id="messages"></div>-->
+
+<!--<div id="quests"><h3 style="color:#9f9;">Quest Log</h3></div>-->
+<!--<div id="requests"><h3 style="color:#9f9;">Requests</h3></div>-->
+
+<!--<div id="wsStatus">WS: idle</div>-->
+
+<!--<script>-->
+<!--    const msgs = document.getElementById("messages");-->
+<!--    const questList = document.getElementById("quests");-->
+<!--    const requestsList = document.getElementById("requests");-->
+<!--    const audioGateBtn = document.getElementById("audioGate");-->
+<!--    const wsStatus = document.getElementById("wsStatus");-->
+
+<!--    // ability state-->
+<!--    const cooldown = new Map();           // id -> next-allowed timestamp-->
+<!--    const questElems = new Map();         // id -> element-->
+<!--    const requestElems = new Map();       // id -> element-->
+<!--    const audCache = new Map();           // id -> { audio, ready, url, volume }-->
+
+<!--    let audioEnabled = false;-->
+
+<!--    // &#45;&#45;&#45;&#45; audio gate &#45;&#45;&#45;&#45;-->
+<!--    function enableAudio() {-->
+<!--        const a = new Audio("data:audio/mp3;base64,//uQZAAAAAAAAAAAAAAAAAAAA"); // tiny silent clip-->
+<!--        a.play().catch(()=>{}).finally(() => {-->
+<!--            audioEnabled = true;-->
+<!--            audioGateBtn.style.display = "none";-->
+<!--        });-->
+<!--    }-->
+<!--    audioGateBtn.addEventListener("click", enableAudio);-->
+
+<!--    // &#45;&#45;&#45;&#45; helpers &#45;&#45;&#45;&#45;-->
+<!--    function toast(text) {-->
+<!--        if (!text) return;-->
+<!--        const d = document.createElement("div");-->
+<!--        d.className = "toast";-->
+<!--        d.textContent = text;-->
+<!--        msgs.appendChild(d);-->
+<!--    }-->
+
+<!--    function beep(ms=200, freq=880) {-->
+<!--        try {-->
+<!--            const C = new (window.AudioContext||window.webkitAudioContext)();-->
+<!--            const o = C.createOscillator(), g = C.createGain();-->
+<!--            o.connect(g); g.connect(C.destination);-->
+<!--            o.type = "square"; o.frequency.value = freq;-->
+<!--            g.gain.setValueAtTime(0.2, C.currentTime);-->
+<!--            o.start(); o.stop(C.currentTime + ms/1000);-->
+<!--        } catch {}-->
+<!--    }-->
+
+<!--    function clamp01(x) {-->
+<!--        x = Number(x);-->
+<!--        if (!isFinite(x)) return undefined;-->
+<!--        return Math.max(0, Math.min(1, x));-->
+<!--    }-->
+
+<!--    function playAbility(id, url, volume) {-->
+<!--        // prefer preloaded audio-->
+<!--        const cached = audCache.get(id);-->
+<!--        const vol = clamp01(volume);-->
+<!--        if (cached && cached.audio) {-->
+<!--            if (url && url !== cached.url) {-->
+<!--                // URL changed → rebuild cache entry-->
+<!--                const na = new Audio(url);-->
+<!--                na.preload = "auto";-->
+<!--                na.volume = vol ?? cached.volume ?? 0.7;-->
+<!--                const entry = { audio: na, ready: false, url, volume: na.volume };-->
+<!--                na.addEventListener("canplaythrough", () => entry.ready = true, { once: true });-->
+<!--                na.load();-->
+<!--                audCache.set(id, entry);-->
+<!--                try { na.currentTime = 0; na.play().catch(()=>{}); } catch {}-->
+<!--                return;-->
+<!--            }-->
+<!--            try {-->
+<!--                cached.audio.volume = vol ?? cached.volume ?? cached.audio.volume ?? 0.7;-->
+<!--                cached.audio.currentTime = 0;-->
+<!--                cached.audio.play().catch(()=>{});-->
+<!--                return;-->
+<!--            } catch {}-->
+<!--        }-->
+<!--        // fallback (not preloaded)-->
+<!--        try {-->
+<!--            const a = new Audio(url);-->
+<!--            a.volume = vol ?? 0.7;-->
+<!--            a.play().catch(()=>{});-->
+<!--        } catch { beep(); }-->
+<!--    }-->
+
+<!--    // &#45;&#45;&#45;&#45; browser TTS &#45;&#45;&#45;&#45;-->
+<!--    function speak(text, voiceHint) {-->
+<!--        if (!("speechSynthesis" in window)) { toast("TTS not supported"); return; }-->
+<!--        if (!text) return;-->
+<!--        const u = new SpeechSynthesisUtterance(text);-->
+<!--        if (voiceHint) {-->
+<!--            const voices = speechSynthesis.getVoices();-->
+<!--            const match = voices.find(v => v.name.toLowerCase().includes(String(voiceHint).toLowerCase()));-->
+<!--            if (match) u.voice = match;-->
+<!--        }-->
+<!--        u.rate = 1.0; u.pitch = 1.0; u.volume = 1.0;-->
+<!--        speechSynthesis.speak(u);-->
+<!--    }-->
+<!--    if ('speechSynthesis' in window) {-->
+<!--        speechSynthesis.getVoices();-->
+<!--        if (speechSynthesis.onvoiceschanged !== undefined) {-->
+<!--            speechSynthesis.onvoiceschanged = () => {};-->
+<!--        }-->
+<!--    }-->
+
+<!--    // &#45;&#45;&#45;&#45; quests &#45;&#45;&#45;&#45;-->
+<!--    function renderQuest(d) {-->
+<!--        const id = d.id;-->
+<!--        if (!id) return;-->
+<!--        let el = questElems.get(id);-->
+<!--        const progress = Number(d.progress ?? 0);-->
+<!--        const target = Math.max(1, Number(d.target || 1));-->
+<!--        const label = `${d.name || "Quest"} — ${progress}/${target}`;-->
+<!--        const html = d.icon_url-->
+<!--            ? `<span style="display:inline-flex;align-items:center;gap:8px;">-->
+<!--             <img src="${d.icon_url}" style="width:20px;height:20px;vertical-align:middle;" />-->
+<!--             <span>${label}</span>-->
+<!--           </span>`-->
+<!--            : `🗡️ ${label}`;-->
+
+<!--        if (!el) {-->
+<!--            el = document.createElement("div");-->
+<!--            el.className = "quest";-->
+<!--            el.dataset.id = id;-->
+<!--            questList.appendChild(el);-->
+<!--            questElems.set(id, el);-->
+<!--        }-->
+<!--        el.innerHTML = html;-->
+
+<!--        const done = progress >= target;-->
+<!--        el.style.opacity = done ? "0.75" : "1";-->
+<!--        el.style.textDecoration = done ? "line-through" : "none";-->
+<!--    }-->
+
+<!--    function removeQuest(id) {-->
+<!--        const el = questElems.get(id);-->
+<!--        if (el) { el.remove(); questElems.delete(id); }-->
+<!--    }-->
+
+<!--    // &#45;&#45;&#45;&#45; requests &#45;&#45;&#45;&#45;-->
+<!--    function renderRequest(d){-->
+<!--        const id = d.id;-->
+<!--        if (!id) return;-->
+<!--        let el = requestElems.get(id);-->
+<!--        const label = `${d.board || "(request)"}${d.note ? " — " + d.note : ""}`;-->
+<!--        const phone = d.masked_phone ? ` <small style="color:#9f9">(${d.masked_phone})</small>` : "";-->
+<!--        const html = `📞 ${label}${phone}`;-->
+<!--        if (!el) {-->
+<!--            el = document.createElement("div");-->
+<!--            el.className = "request";-->
+<!--            el.dataset.id = id;-->
+<!--            requestsList.appendChild(el);-->
+<!--            requestElems.set(id, el);-->
+<!--        }-->
+<!--        el.innerHTML = html;-->
+<!--    }-->
+<!--    function removeRequest(id){-->
+<!--        const el = requestElems.get(id);-->
+<!--        if (el) { el.remove(); requestElems.delete(id); }-->
+<!--    }-->
+
+<!--    // &#45;&#45;&#45;&#45; preload all ability sounds on load &#45;&#45;&#45;&#45;-->
+<!--    async function preloadSounds() {-->
+<!--        try {-->
+<!--            const data = await fetch('/api/catalog').then(r => r.json());-->
+<!--            const list = (data && data.abilities) || [];-->
+<!--            let count = 0;-->
+<!--            list.forEach(a => {-->
+<!--                if (!a || !a.id || !a.sfx_url) return;-->
+<!--                const entry = { audio: new Audio(a.sfx_url), ready: false, url: a.sfx_url, volume: clamp01(a.volume) ?? 0.7 };-->
+<!--                entry.audio.preload = "auto";-->
+<!--                entry.audio.volume = entry.volume;-->
+<!--                entry.audio.addEventListener("canplaythrough", () => entry.ready = true, { once: true });-->
+<!--                entry.audio.load();-->
+<!--                audCache.set(a.id, entry);-->
+<!--                count++;-->
+<!--            });-->
+<!--            if (count) toast(`Preloading ${count} sound${count===1?"":"s"}…`);-->
+<!--        } catch (e) {-->
+<!--            // ignore-->
+<!--        }-->
+<!--    }-->
+<!--    window.addEventListener('load', preloadSounds);-->
+
+<!--    // &#45;&#45;&#45;&#45; WebSocket with auto-reconnect &#45;&#45;&#45;&#45;-->
+<!--    const wsUrl = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";-->
+<!--    let ws, retry = 0;-->
+
+<!--    function connectWS() {-->
+<!--        wsStatus.textContent = "WS: connecting";-->
+<!--        ws = new WebSocket(wsUrl);-->
+
+<!--        ws.onopen = () => {-->
+<!--            retry = 0;-->
+<!--            wsStatus.textContent = "WS: connected";-->
+<!--            toast("WebSocket open → " + wsUrl);-->
+<!--        };-->
+
+<!--        ws.onmessage = (event) => {-->
+<!--            let msg; try { msg = JSON.parse(event.data); } catch { return; }-->
+<!--            if (!msg || !msg.type) return;-->
+
+<!--            if (msg.type === "DONATION") {-->
+<!--                const d = msg.data || {};-->
+<!--                const cents = Number(d.amount || 0);-->
+<!--                const dollars = isFinite(cents) ? (cents/100).toFixed(2) : "0.00";-->
+<!--                toast(`💸 ${d.donor || "Anonymous"} donated $${dollars}${d.msg ? " — " + d.msg : ""}`);-->
+<!--            }-->
+
+<!--            if (msg.type === "ABILITY_FIRE") {-->
+<!--                const d = msg.data || {};-->
+<!--                const id = d.id || "ability";-->
+<!--                const cd = Number(d.cooldown_ms || 3000);-->
+<!--                const vol = d.volume;-->
+<!--                const until = cooldown.get(id) || 0;-->
+<!--                const now = Date.now();-->
+<!--                if (now >= until) {-->
+<!--                    cooldown.set(id, now + (isFinite(cd) ? cd : 3000));-->
+<!--                    d.sfx_url ? playAbility(id, d.sfx_url, vol) : beep();-->
+<!--                }-->
+<!--            }-->
+
+<!--            if (msg.type === "TTS_PLAY") {-->
+<!--                const d = msg.data || {};-->
+<!--                speak(d.text, d.voice);-->
+<!--            }-->
+
+<!--            if (msg.type === "QUEST_UPSERT") renderQuest(msg.data || {});-->
+<!--            if (msg.type === "QUEST_ADD") {-->
+<!--                const d = msg.data || {};-->
+<!--                d.progress = d.progress ?? 0;-->
+<!--                d.target = d.target || 1;-->
+<!--                renderQuest(d);-->
+<!--            }-->
+<!--            if (msg.type === "QUEST_REMOVE") {-->
+<!--                const d = msg.data || {};-->
+<!--                if (d.id) removeQuest(d.id);-->
+<!--            }-->
+
+<!--            if (msg.type === "REQUEST_ADD")   renderRequest(msg.data || {});-->
+<!--            if (msg.type === "REQUEST_REMOVE") {-->
+<!--                const d = msg.data || {};-->
+<!--                if (d.id != null) removeRequest(d.id);-->
+<!--            }-->
+<!--        };-->
+
+<!--        ws.onclose = () => {-->
+<!--            wsStatus.textContent = "WS: disconnected";-->
+<!--            const delay = Math.min(30000, 1000 * Math.pow(2, retry++));-->
+<!--            wsStatus.textContent = `WS: reconnecting in ${Math.round(delay/1000)}s`;-->
+<!--            setTimeout(connectWS, delay);-->
+<!--        };-->
+
+<!--        ws.onerror = () => { /* handled by onclose */ };-->
+<!--    }-->
+
+<!--    connectWS();-->
+<!--</script>-->
+<!--</body>-->
+<!--</html>-->
