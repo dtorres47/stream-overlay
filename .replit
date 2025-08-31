@@ -1,2 +1,2 @@
 language = "bash"
-run      = "bash init-go.sh && go run cmd/stream-overlay/main.go"
+run      = "source ./init-go.sh && go run cmd/stream-overlay/main.go"
