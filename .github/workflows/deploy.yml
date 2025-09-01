@@ -2,41 +2,51 @@ name: Build & Deploy Stream Overlay
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+
     steps:
-      # 1. Check out the repository
+      # 1) Checkout (with LFS in case your MP4 is stored via Git LFS)
       - name: Checkout code
-        uses: actions/checkout@v3
-
-      # 2. Set up Go for your build script
-      - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/checkout@v4
         with:
-          go-version: '1.24.x'
+          lfs: true
 
-      # 3. Ensure your build script is executable
-      - name: Make build.sh executable
-        run: chmod +x ./build.sh
+      # 2) Set up Go
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Use a real available version (adjust if you need)
+          go-version: '1.23.x'
+          cache: true
 
-      # 4. Run build.sh (produces build/stream-overlay-web with index.html, panel.html, etc.)
-      - name: Run build script
-        run: ./build.sh
-
-      # 5. Deploy static files to S3
-      - name: Deploy static site to S3
-        env:
-          AWS_S3_BUCKET: david-portfolio-site
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: us-east-1
+      # 3) Make build.sh executable and run it
+      - name: Build site
+        shell: bash
         run: |
-          # Copy your index.html to the bucket root so it becomes the homepage
-          aws s3 cp build/stream-overlay-web/index.html s3://$AWS_S3_BUCKET/index.html --acl public-read
-          # Sync the rest of your static files (panel.html, assets) under a subfolder
-          aws s3 sync build/stream-overlay-web s3://$AWS_S3_BUCKET/stream-overlay-web --acl public-read --delete
+          chmod +x ./build.sh
+          ./build.sh
+
+      # 4) Configure AWS creds (uses your repo secrets)
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      # 5) Deploy ALL static files to the BUCKET ROOT
+      #    This preserves your relative paths like css/overlay.css, assets/..., js/..., etc.
+      - name: Deploy static site to S3 (bucket root)
+        run: |
+          aws s3 sync build/stream-overlay-web s3://david-portfolio-site/ --acl public-read --delete
+
+      # OPTIONAL: If you front S3 with CloudFront, uncomment to invalidate
+      # - name: Invalidate CloudFront
+      #   run: aws cloudfront create-invalidation --distribution-id YOUR_DISTRIBUTION_ID --paths "/*"
