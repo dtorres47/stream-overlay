@@ -2,33 +2,49 @@ name: Build & Deploy Stream Overlay
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Check out the repository
       - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          lfs: true
+        uses: actions/checkout@v3
 
+      # 2. Set up Go for your build script
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v4
         with:
+          # Keep what worked for you previously if you prefer; 1.23.x is broadly available
           go-version: '1.23.x'
-          cache: true
 
-      - name: Build site
+      # 3. Ensure your build script is executable
+      - name: Make build.sh executable
+        run: chmod +x ./build.sh
+
+      # 4. Run build.sh (produces build/stream-overlay-web/*)
+      - name: Run build script
+        run: ./build.sh
+
+      # 5. Ensure AWS CLI is available (usually preinstalled, but just in case)
+      - name: Install AWS CLI if needed
         run: |
-          chmod +x ./build.sh
-          ./build.sh
+          if ! command -v aws >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y awscli
+          fi
+          aws --version
 
-      - name: Deploy static site to S3 (bucket root)
+      # 6. Deploy ALL static files to the BUCKET ROOT
+      #    This keeps your relative paths intact (css/, assets/, js/, etc.)
+      - name: Deploy static site to S3
         env:
+          AWS_S3_BUCKET: david-portfolio-site
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-east-1
+          AWS_REGION: us-east-1
         run: |
-          aws s3 sync build/stream-overlay-web s3://david-portfolio-site/ --acl public-read --delete
+          aws s3 sync build/stream-overlay-web s3://$AWS_S3_BUCKET/ --acl public-read --delete
