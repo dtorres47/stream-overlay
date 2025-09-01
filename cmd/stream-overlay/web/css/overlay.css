@@ -11,21 +11,21 @@ html, body {
     overflow: hidden;
 }
 
-/* Background video — fixed, fills screen, behind content */
+/* Background video — fit entire video, preserve 2:3, letterbox if needed */
 #bg-video {
     position: fixed;
     inset: 0;
     width: 100%;
     height: 100%;
-    object-fit: contain;   /* fit whole video, preserve aspect ratio */
+    object-fit: contain;   /* <-- keeps whole 1080x1620 in view */
     z-index: 0;
-    background: #1f1f1f;   /* fills letterbox areas */
+    background: #1f1f1f;   /* fills the letterbox area */
 }
 
-/* Foreground overlay sits above video */
+/* Foreground overlay above video */
 .overlay-container {
     position: relative;
-    z-index: 1;          /* ensure above video */
+    z-index: 1;
     display: flex;
     flex-direction: column;
     gap: var(--quest-gap);
@@ -35,11 +35,10 @@ html, body {
     box-sizing: border-box;
     font-family: 'Press Start 2P', monospace;
     color: #eee;
-    /* transparent so the video shows through */
     background: transparent;
 }
 
-/* Click animation layer */
+/* Click animation layer (darken + centered video) */
 #animation-overlay {
     position: absolute;
     inset: 0;
@@ -47,15 +46,18 @@ html, body {
     display: flex; align-items: center; justify-content: center;
     opacity: 0; transition: opacity 0.2s ease;
     z-index: 10;
-    pointer-events: none;            /* don't block clicks when hidden */
+    pointer-events: none;       /* ignore clicks when hidden */
 }
 #animation-overlay.active {
     opacity: 1;
-    pointer-events: auto;           /* block clicks during animation */
+    pointer-events: auto;       /* block clicks during animation */
 }
-#animation-gif {
-    width: 100vw; height: 100vh;
-    object-fit: contain; image-rendering: pixelated;
+
+/* Popup animation video fills viewport, preserves aspect */
+#animation-video {
+    width: 100vw;
+    height: 100vh;
+    object-fit: contain;
 }
 
 /* Scroll area fills remaining space; shows scrollbar when >4 quests */
@@ -131,310 +133,45 @@ html, body {
 }
 .stats-item { font-size: 1.1rem; text-align: center; }
 
+/* Quest popup message */
+#quest-popup-message {
+    position: absolute;
+    bottom: 10%;
+    left: 50%;
+    transform: translateX(-50%) translateY(10px);
+    z-index: 20;
+    text-align: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+#quest-popup-message.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+#quest-popup-message.fade-out {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-10px);
+}
 
 
-/*:root {*/
-/*    --quest-height: 140px;*/
-/*    --quest-gap: 16px;*/
-/*}*/
+.quest-popup-box {
+    display: inline-block;
+    padding: 16px 24px;
+    background: rgba(30,30,30,0.9);
+    border: 4px solid gold;
+    box-shadow: 0 0 12px gold;
+    border-radius: 8px;
+    font-family: 'Press Start 2P', monospace;
+    color: #ffd700;
+    font-size: 1.2rem;
+    text-shadow: 1px 1px 2px #000;
+}
 
-/*!* Reset & full viewport *!*/
-/*html, body {*/
-/*    margin: 0;*/
-/*    padding: 0;*/
-/*    height: 100%;*/
-/*}*/
-/*body {*/
-/*    overflow: hidden;*/
-/*}*/
-
-/*!* Container spans full screen, stats at bottom *!*/
-/*.overlay-container {*/
-/*    position: absolute;*/
-/*    top: 0; left: 0;*/
-/*    width: 100%;*/
-/*    height: 100%;*/
-/*    box-sizing: border-box;*/
-/*    padding: 16px;*/
-/*    border: 4px solid #555;*/
-/*    background-color: #1f1f1f;*/
-/*    background-image: url("../assets/fred-wizard-overlay-background.png");*/
-/*    background-repeat: no-repeat;*/
-/*    background-position: center;*/
-/*    background-size: contain;*/
-/*    font-family: 'Press Start 2P', monospace;*/
-/*    color: #eee;*/
-
-/*    display: flex;*/
-/*    flex-direction: column;*/
-/*    gap: var(--quest-gap);*/
-/*}*/
-
-/*!* Animation overlay *!*/
-/*#animation-overlay {*/
-/*    position: absolute;*/
-/*    top: 0; left: 0;*/
-/*    width: 100%;*/
-/*    height: 100%;*/
-/*    background: rgba(0, 0, 0, 0.8);*/
-/*    display: flex;*/
-/*    align-items: center;*/
-/*    justify-content: center;*/
-/*    pointer-events: none;*/
-/*    opacity: 0;*/
-/*    transition: opacity 0.2s ease;*/
-/*    z-index: 1000;*/
-/*}*/
-/*#animation-overlay.active {*/
-/*    opacity: 1;*/
-/*    pointer-events: auto;*/
-/*}*/
-/*#animation-gif {*/
-/*    max-width: 80%;*/
-/*    max-height: 80%;*/
-/*    image-rendering: pixelated;*/
-/*}*/
-
-/*!* Scroll area stretches under quests *!*/
-/*.quest-scroll {*/
-/*    flex: 1 1 auto;*/
-/*    min-height: calc((var(--quest-height) * 4) + (var(--quest-gap) * 3));*/
-/*    overflow-y: auto;*/
-/*    scrollbar-width: thin;*/
-/*    scrollbar-color: #888 transparent;*/
-/*}*/
-/*.quest-scroll::-webkit-scrollbar {*/
-/*    width: 8px;*/
-/*}*/
-/*.quest-scroll::-webkit-scrollbar-thumb {*/
-/*    background: #888;*/
-/*    border-radius: 4px;*/
-/*}*/
-/*.quest-scroll::-webkit-scrollbar-track {*/
-/*    background: transparent;*/
-/*}*/
-
-/*!* Quest list *!*/
-/*.quest-history {*/
-/*    display: flex;*/
-/*    flex-direction: column;*/
-/*    gap: var(--quest-gap);*/
-/*}*/
-
-/*.quest-bubble {*/
-/*    display: flex;*/
-/*    align-items: center;*/
-/*    height: var(--quest-height);*/
-/*    background: rgba(42, 42, 42, 0.6);*/
-/*    border: 3px solid #444;*/
-/*    padding: 12px;*/
-/*    box-shadow: 2px 2px 0 #000;*/
-/*    cursor: pointer;*/
-/*}*/
-/*.quest-bubble.completed {*/
-/*    cursor: default;*/
-/*    opacity: 0.15;*/
-/*    background: transparent;*/
-/*    border-color: rgba(68, 68, 68, 0.15);*/
-/*}*/
-
-/*.quest-icon {*/
-/*    flex: 0 0 var(--quest-height);*/
-/*    height: var(--quest-height);*/
-/*    margin-right: 16px;*/
-/*    border: 3px solid #444;*/
-/*    background: #111;*/
-/*    display: flex;*/
-/*    align-items: center;*/
-/*    justify-content: center;*/
-/*}*/
-/*.quest-icon img {*/
-/*    width: 100%;*/
-/*    height: 100%;*/
-/*    object-fit: contain;*/
-/*    image-rendering: pixelated;*/
-/*}*/
-
-/*.quest-text {*/
-/*    flex: 1 1 auto;*/
-/*    text-align: left;*/
-/*}*/
-/*.quest-title {*/
-/*    margin: 0;*/
-/*    font-size: 1.4rem;*/
-/*    line-height: 1.1;*/
-/*}*/
-/*.quest-desc {*/
-/*    margin: 6px 0 0;*/
-/*    font-size: 1.1rem;*/
-/*    line-height: 1.2;*/
-/*    opacity: 0.9;*/
-/*}*/
-
-/*.quest-count {*/
-/*    flex: 0 0 70px;*/
-/*    text-align: right;*/
-/*    font-size: 1.4rem;*/
-/*    margin-left: 16px;*/
-/*}*/
-
-/*!* Stats bar at bottom *!*/
-/*.quest-stats {*/
-/*    flex: 0 0 calc(var(--quest-height) * 0.25);*/
-/*    display: flex;*/
-/*    align-items: center;*/
-/*    justify-content: space-around;*/
-/*    background: rgba(30, 30, 30, 0.7);*/
-/*    border: 3px solid #444;*/
-/*    padding: 4px;*/
-/*    box-shadow: 2px 2px 0 #000;*/
-/*}*/
-/*.stats-item {*/
-/*    font-size: 1.1rem;*/
-/*    text-align: center;*/
-/*}*/
-
-
-
-/*!*:root {*!*/
-/*!*    --quest-height: 140px;*!*/
-/*!*    --quest-gap: 16px;*!*/
-/*!*}*!*/
-
-/*!*!* Reset & full-screen *!*!*/
-/*!*html, body {*!*/
-/*!*    margin: 0;*!*/
-/*!*    padding: 0;*!*/
-/*!*    height: 100%;*!*/
-/*!*}*!*/
-/*!*body {*!*/
-/*!*    overflow: hidden;*!*/
-/*!*}*!*/
-
-/*!*!* Container fills viewport; stats stuck to bottom *!*!*/
-/*!*.overlay-container {*!*/
-/*!*    position: absolute;*!*/
-/*!*    top: 0; left: 0;*!*/
-/*!*    width: 100%;*!*/
-/*!*    height: 100%;*!*/
-/*!*    box-sizing: border-box;*!*/
-/*!*    padding: 16px;*!*/
-/*!*    border: 4px solid #555;*!*/
-/*!*    background-color: #1f1f1f;*!*/
-/*!*    background-image: url("../assets/fred-wizard-overlay-background.png");*!*/
-/*!*    background-repeat: no-repeat;*!*/
-/*!*    background-position: center;*!*/
-/*!*    background-size: contain;*!*/
-/*!*    font-family: 'Press Start 2P', monospace;*!*/
-/*!*    color: #eee;*!*/
-
-/*!*    display: flex;*!*/
-/*!*    flex-direction: column;*!*/
-/*!*    gap: var(--quest-gap);*!*/
-/*!*}*!*/
-
-/*!*!* Scroll area stretches between padding and stats bar *!*!*/
-/*!*.quest-scroll {*!*/
-/*!*    flex: 1 1 auto;*!*/
-/*!*    min-height: calc((var(--quest-height) * 4) + (var(--quest-gap) * 3));*!*/
-/*!*    overflow-y: auto;*!*/
-/*!*    scrollbar-width: thin;*!*/
-/*!*    scrollbar-color: #888 transparent;*!*/
-/*!*}*!*/
-/*!*.quest-scroll::-webkit-scrollbar {*!*/
-/*!*    width: 8px;*!*/
-/*!*}*!*/
-/*!*.quest-scroll::-webkit-scrollbar-thumb {*!*/
-/*!*    background: #888;*!*/
-/*!*    border-radius: 4px;*!*/
-/*!*}*!*/
-/*!*.quest-scroll::-webkit-scrollbar-track {*!*/
-/*!*    background: transparent;*!*/
-/*!*}*!*/
-
-/*!*!* Vertical stack *!*!*/
-/*!*.quest-history {*!*/
-/*!*    display: flex;*!*/
-/*!*    flex-direction: column;*!*/
-/*!*    gap: var(--quest-gap);*!*/
-/*!*}*!*/
-
-/*!*!* Quest bubble *!*!*/
-/*!*.quest-bubble {*!*/
-/*!*    display: flex;*!*/
-/*!*    align-items: center;*!*/
-/*!*    height: var(--quest-height);*!*/
-/*!*    background: rgba(42, 42, 42, 0.6);*!*/
-/*!*    border: 3px solid #444;*!*/
-/*!*    padding: 12px;*!*/
-/*!*    box-shadow: 2px 2px 0 #000;*!*/
-/*!*}*!*/
-
-/*!*!* Completed quests *!*!*/
-/*!*.quest-bubble.completed {*!*/
-/*!*    !* make the whole box—including text and icon—very faint *!*!*/
-/*!*    opacity: 0.40;*!*/
-/*!*    !* tweak the border to match *!*!*/
-/*!*    border-color: rgba(68, 68, 68, 0.15);*!*/
-/*!*    !* optional: remove background entirely for max transparency *!*!*/
-/*!*    background: transparent;*!*/
-/*!*}*!*/
-
-/*!*!* Icon fills full height *!*!*/
-/*!*.quest-icon {*!*/
-/*!*    flex: 0 0 var(--quest-height);*!*/
-/*!*    height: var(--quest-height);*!*/
-/*!*    margin-right: 16px;*!*/
-/*!*    border: 3px solid #444;*!*/
-/*!*    background: #111;*!*/
-/*!*    display: flex;*!*/
-/*!*    align-items: center;*!*/
-/*!*    justify-content: center;*!*/
-/*!*}*!*/
-/*!*.quest-icon img {*!*/
-/*!*    width: 100%;*!*/
-/*!*    height: 100%;*!*/
-/*!*    object-fit: contain;*!*/
-/*!*    image-rendering: pixelated;*!*/
-/*!*}*!*/
-
-/*!*!* Text area *!*!*/
-/*!*.quest-text {*!*/
-/*!*    flex: 1 1 auto;*!*/
-/*!*    text-align: left;*!*/
-/*!*}*!*/
-/*!*.quest-title {*!*/
-/*!*    margin: 0;*!*/
-/*!*    font-size: 1.4rem;*!*/
-/*!*    line-height: 1.1;*!*/
-/*!*}*!*/
-/*!*.quest-desc {*!*/
-/*!*    margin: 6px 0 0;*!*/
-/*!*    font-size: 1.1rem;*!*/
-/*!*    line-height: 1.2;*!*/
-/*!*    opacity: 0.9;*!*/
-/*!*}*!*/
-
-/*!*!* Count on right *!*!*/
-/*!*.quest-count {*!*/
-/*!*    flex: 0 0 70px;*!*/
-/*!*    text-align: right;*!*/
-/*!*    font-size: 1.4rem;*!*/
-/*!*    margin-left: 16px;*!*/
-/*!*}*!*/
-
-/*!*!* Stats bar at bottom *!*!*/
-/*!*.quest-stats {*!*/
-/*!*    flex: 0 0 calc(var(--quest-height) * 0.25);*!*/
-/*!*    display: flex;*!*/
-/*!*    align-items: center;*!*/
-/*!*    justify-content: space-around;*!*/
-/*!*    background: rgba(30, 30, 30, 0.7);*!*/
-/*!*    border: 3px solid #444;*!*/
-/*!*    padding: 4px;*!*/
-/*!*    box-shadow: 2px 2px 0 #000;*!*/
-/*!*}*!*/
-/*!*.stats-item {*!*/
-/*!*    font-size: 1.1rem;*!*/
-/*!*    text-align: center;*!*/
-/*!*}*!*/
+/* Fade animation */
+@keyframes fadeInOut {
+    0% { opacity: 0; transform: translate(-50%, 20px); }
+    10% { opacity: 1; transform: translate(-50%, 0); }
+    80% { opacity: 1; }
+    100% { opacity: 0; transform: translate(-50%, -20px); }
+}
